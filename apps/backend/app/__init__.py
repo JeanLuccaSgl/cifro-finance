@@ -1,0 +1,1 @@
+"""Cifro FastAPI application."""
