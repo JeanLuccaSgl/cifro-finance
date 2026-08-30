@@ -172,9 +172,9 @@ function Sidebar({ active, accountName, onLogout }) {
       </a>
 
       <nav className="mainNav" aria-label="Navegação principal">
-        <a className={active === "dashboard" ? "navItem active" : "navItem"} href="/"><span>01</span> Visão geral</a>
-        <a className={active === "register" ? "navItem active" : "navItem"} href="/registrar"><span>02</span> Registrar</a>
-        <a className={active === "categories" ? "navItem active" : "navItem"} href="/categorias"><span>03</span> Categorias</a>
+        <a className={active === "dashboard" ? "navItem active" : "navItem"} href="/">Visão geral</a>
+        <a className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</a>
+        <a className={active === "categories" ? "navItem active" : "navItem"} href="/categorias">Categorias</a>
       </nav>
 
       <div className="account">
@@ -412,6 +412,9 @@ function RegisterView({ session, accountName, onLogout }) {
           <a className="backLink" href="/">← Visão geral</a>
         </header>
 
+        <div className="registrationLayout">
+          <div className="registrationMain">
+
         <section className="registrationIntro" aria-labelledby="registration-title">
           <p className="eyebrow">REGISTRO RÁPIDO</p>
           <h2 id="registration-title">O que aconteceu?</h2>
@@ -602,6 +605,29 @@ function RegisterView({ session, accountName, onLogout }) {
             })}
           </div>
         </section>
+
+          </div>
+
+          <aside className="quickCategories" aria-labelledby="quick-categories-title">
+            <div className="asideHeading">
+              <p className="eyebrow">ATALHOS</p>
+              <h2 id="quick-categories-title">Categorias</h2>
+            </div>
+            <p className="asideDescription">Escolha uma categoria na confirmação ou organize as suas aqui.</p>
+            <div className="quickCategoryList">
+              {categories.length === 0 ? (
+                <p className="emptyState">Nenhuma categoria criada.</p>
+              ) : categories.slice(0, 6).map((category) => (
+                <div className="quickCategory" key={category.id}>
+                  <span className="categoryDot" />
+                  <strong>{category.name}</strong>
+                  <span>{categoryKindLabel(category.kind)}</span>
+                </div>
+              ))}
+            </div>
+            <a className="asideLink" href="/categorias">Gerenciar categorias <span>→</span></a>
+          </aside>
+        </div>
       </section>
     </main>
   );
@@ -701,6 +727,10 @@ function CategoriesView({ session, accountName, onLogout }) {
     }
   }
 
+  const expenseCategoryCount = categories.filter((category) => category.kind === "expense" || category.kind === "both").length;
+  const incomeCategoryCount = categories.filter((category) => category.kind === "income" || category.kind === "both").length;
+  const sharedCategoryCount = categories.filter((category) => category.kind === "both").length;
+
   return (
     <main className="shell">
       <Sidebar active="categories" accountName={accountName} onLogout={onLogout} />
@@ -713,6 +743,8 @@ function CategoriesView({ session, accountName, onLogout }) {
           <a className="backLink" href="/registrar">← Registrar</a>
         </header>
 
+        <div className="categoryLayout">
+          <div className="categoryMain">
         <section className="categoryIntro">
           <p className="eyebrow">CATEGORIAS</p>
           <h2>Nomeie o que se repete na sua vida financeira.</h2>
@@ -774,6 +806,21 @@ function CategoriesView({ session, accountName, onLogout }) {
             ))}
           </div>
         </section>
+          </div>
+
+          <aside className="categorySummary" aria-labelledby="category-summary-title">
+            <p className="eyebrow">RESUMO</p>
+            <h2 id="category-summary-title">Organização simples.</h2>
+            <strong className="categoryTotal">{categories.length}</strong>
+            <span className="categoryTotalLabel">categorias ativas</span>
+            <div className="summaryRows">
+              <div><span>Para gastos</span><b>{expenseCategoryCount}</b></div>
+              <div><span>Para recebimentos</span><b>{incomeCategoryCount}</b></div>
+              <div><span>Para os dois</span><b>{sharedCategoryCount}</b></div>
+            </div>
+            <a className="asideLink" href="/registrar">Registrar movimentação <span>→</span></a>
+          </aside>
+        </div>
       </section>
     </main>
   );
