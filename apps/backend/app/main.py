@@ -101,9 +101,35 @@ def as_money(value: Decimal | None) -> Decimal:
 IMPORT_MAX_BYTES = 10 * 1024 * 1024
 IMPORT_PREVIEW_LIMIT = 100
 IMPORT_FIELDS = ("date", "description", "amount", "direction", "income", "expense", "category", "status", "notes")
+IMPORT_MONTH_NAMES = {
+    "janeiro": 1,
+    "fevereiro": 2,
+    "marco": 3,
+    "abril": 4,
+    "maio": 5,
+    "junho": 6,
+    "julho": 7,
+    "agosto": 8,
+    "setembro": 9,
+    "outubro": 10,
+    "novembro": 11,
+    "dezembro": 12,
+    "jan": 1,
+    "fev": 2,
+    "mar": 3,
+    "abr": 4,
+    "mai": 5,
+    "jun": 6,
+    "jul": 7,
+    "ago": 8,
+    "set": 9,
+    "out": 10,
+    "nov": 11,
+    "dez": 12,
+}
 IMPORT_ALIASES = {
     "date": ("data", "date", "dia", "quando", "ocorrido em", "ocorrencia"),
-    "description": ("descricao", "historico", "detalhes", "lancamento", "movimento", "evento", "nome"),
+    "description": ("descricao", "historico", "detalhes", "lancamento", "movimento", "evento", "nome", "item", "item/servico", "servico", "produto"),
     "amount": ("valor", "amount", "total", "quantia", "preco", "preco total"),
     "direction": ("tipo", "type", "natureza", "operacao", "movimentacao", "movimento"),
     "income": ("entrada", "receita", "recebimento", "credito", "creditos"),
@@ -168,6 +194,47 @@ def detect_import_mapping(headers: list[str]) -> dict[str, str | None]:
     return mapping
 
 
+def count_import_month_headers(rows: list[list[object]]) -> int:
+    found_months: set[int] = set()
+    for row in rows[:8]:
+        for value in row:
+            normalized = normalize_import_text(value)
+            if normalized in IMPORT_MONTH_NAMES:
+                found_months.add(IMPORT_MONTH_NAMES[normalized])
+    return len(found_months)
+
+
+def count_nonempty_import_rows(rows: list[list[object]], start: int = 0) -> int:
+    return sum(1 for values in rows[start:] if any(import_cell_text(value) for value in values))
+
+
+def classify_import_sheet(
+    rows: list[list[object]],
+    header_index: int | None,
+    headers: list[str],
+) -> tuple[str, str, int]:
+    mapping = detect_import_mapping(headers) if header_index is not None else {}
+    indexes = import_mapping_indexes(headers, mapping) if header_index is not None else {}
+    has_transaction_shape = (
+        header_index is not None
+        and indexes.get("date") is not None
+        and indexes.get("description") is not None
+        and (
+            indexes.get("amount") is not None
+            or indexes.get("income") is not None
+            or indexes.get("expense") is not None
+        )
+    )
+    month_headers = count_import_month_headers(rows)
+    if has_transaction_shape:
+        return "transactions", "Encontramos linhas com data, descrição e valor.", 90
+    if month_headers >= 3:
+        return "summary", "Encontramos meses nas colunas; este parece ser um resumo mensal ou orçamento.", 95
+    if header_index is not None:
+        return "unknown", "Há um cabeçalho, mas faltam campos suficientes para identificar movimentações.", 45
+    return "unknown", "Não encontrei uma estrutura de movimentações ou de resumo mensal reconhecível.", 20
+
+
 def import_mapping_indexes(headers: list[str], mapping: dict[str, str | None]) -> dict[str, int | None]:
     return {
         field: headers.index(column) if column in headers else None
@@ -189,6 +256,56 @@ def parse_import_date(value: object) -> str | None:
         except ValueError:
             continue
     return None
+
+
+IMPORT_MONTHS = {
+    "janeiro": 1,
+    "fevereiro": 2,
+    "marco": 3,
+    "abril": 4,
+    "maio": 5,
+    "junho": 6,
+    "julho": 7,
+    "agosto": 8,
+    "setembro": 9,
+    "outubro": 10,
+    "novembro": 11,
+    "dezembro": 12,
+}
+
+
+def parse_import_sheet_period(sheet_name: str) -> tuple[int, int] | None:
+    normalized = normalize_import_text(sheet_name)
+    month_pattern = "|".join(IMPORT_MONTHS)
+    month_match = re.search(rf"({month_pattern})\D*(20\d{{2}})", normalized)
+    if month_match:
+        return int(month_match.group(2)), IMPORT_MONTHS[month_match.group(1)]
+
+    numeric_match = re.search(r"(20\d{2})\D{1,3}(0?[1-9]|1[0-2])", normalized)
+    if numeric_match:
+        return int(numeric_match.group(1)), int(numeric_match.group(2))
+    return None
+
+
+def parse_import_partial_date(value: object, sheet_name: str) -> str | None:
+    text = import_cell_text(value)
+    match = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})", text)
+    period = parse_import_sheet_period(sheet_name)
+    if not match or not period:
+        return None
+
+    first, second = (int(match.group(1)), int(match.group(2)))
+    year, sheet_month = period
+    if second == sheet_month and first <= 31:
+        day = first
+    elif first == sheet_month and second <= 31:
+        day = second
+    else:
+        return None
+    try:
+        return date(year, sheet_month, day).isoformat()
+    except ValueError:
+        return None
 
 
 def parse_import_amount(value: object) -> Decimal | None:
@@ -251,6 +368,11 @@ def normalize_import_row(
     warnings: list[str] = []
     raw_description = import_cell_text(value_for("description"))
     parsed_date = parse_import_date(value_for("date"))
+    if not parsed_date:
+        partial_date = parse_import_partial_date(value_for("date"), sheet_name)
+        if partial_date:
+            parsed_date = partial_date
+            warnings.append("Ano/mês complementados pelo nome da aba")
     direction = parse_import_direction(value_for("direction"))
     income = parse_import_amount(value_for("income"))
     expense = parse_import_amount(value_for("expense"))
@@ -1037,22 +1159,41 @@ async def preview_transaction_import(
     total_rows = 0
     valid_rows = 0
     invalid_rows = 0
+    ignored_rows = 0
+    sheet_types = []
 
     for sheet_name, rows in sheets:
-        header_index, headers, header_score = find_import_header(rows)
-        if header_index is None:
+        header_index, headers, _header_score = find_import_header(rows)
+        sheet_type, classification_reason, classification_confidence = classify_import_sheet(
+            rows,
+            header_index,
+            headers,
+        )
+        sheet_types.append(sheet_type)
+
+        if sheet_type != "transactions":
+            sheet_ignored = count_nonempty_import_rows(rows)
+            ignored_rows += sheet_ignored
             sheet_previews.append(
                 {
                     "name": sheet_name,
-                    "header_row": None,
-                    "headers": [],
-                    "mapping": {field: None for field in IMPORT_FIELDS},
-                    "confidence": 0,
+                    "type": sheet_type,
+                    "header_row": header_index + 1 if header_index is not None else None,
+                    "headers": headers,
+                    "mapping": detect_import_mapping(headers) if header_index is not None else {field: None for field in IMPORT_FIELDS},
+                    "confidence": classification_confidence,
+                    "classification": {
+                        "type": sheet_type,
+                        "reason": classification_reason,
+                        "confidence": classification_confidence,
+                    },
                     "total_rows": 0,
                     "valid_rows": 0,
                     "invalid_rows": 0,
+                    "ignored_rows": sheet_ignored,
                     "rows": [],
-                    "errors": ["Não encontrei uma linha de cabeçalho reconhecível"],
+                    "errors": [],
+                    "importable": False,
                 }
             )
             continue
@@ -1094,25 +1235,55 @@ async def preview_transaction_import(
         sheet_previews.append(
             {
                 "name": sheet_name,
+                "type": "transactions",
                 "header_row": header_index + 1,
                 "headers": headers,
                 "mapping": mapping,
-                "confidence": min(100, header_score * 20),
+                "confidence": classification_confidence,
+                "classification": {
+                    "type": "transactions",
+                    "reason": classification_reason,
+                    "confidence": classification_confidence,
+                },
                 "total_rows": sheet_total,
                 "valid_rows": sheet_valid,
                 "invalid_rows": sheet_invalid,
+                "ignored_rows": 0,
                 "rows": preview_rows,
                 "errors": [],
+                "importable": True,
             }
         )
+
+    distinct_types = set(sheet_types)
+    if distinct_types == {"transactions"}:
+        workbook_type = "transactions"
+        workbook_label = "Movimentações"
+        workbook_message = "As abas têm estrutura de lançamentos e podem seguir para a próxima etapa."
+    elif "transactions" in distinct_types and "summary" in distinct_types:
+        workbook_type = "mixed"
+        workbook_label = "Planilha mista"
+        workbook_message = "Algumas abas têm movimentações; resumos e orçamentos ficarão fora da importação."
+    elif "summary" in distinct_types:
+        workbook_type = "summary"
+        workbook_label = "Resumo mensal ou orçamento"
+        workbook_message = "Esta planilha organiza meses, categorias e totais; ela não será convertida em lançamentos automaticamente."
+    else:
+        workbook_type = "unknown"
+        workbook_label = "Formato não reconhecido"
+        workbook_message = "Não encontramos uma estrutura segura de movimentações para importar."
 
     return {
         "filename": filename,
         "format": "xlsx" if filename.lower().endswith(".xlsx") else "csv",
+        "workbook_type": workbook_type,
+        "workbook_label": workbook_label,
+        "workbook_message": workbook_message,
         "total_sheets": len(sheet_previews),
         "total_rows": total_rows,
         "valid_rows": valid_rows,
         "invalid_rows": invalid_rows,
+        "ignored_rows": ignored_rows,
         "preview_limit": IMPORT_PREVIEW_LIMIT,
         "sheets": sheet_previews,
     }

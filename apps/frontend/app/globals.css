@@ -303,7 +303,13 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .dataSectionHeading { display: flex; align-items: flex-end; justify-content: space-between; gap: 15px; }
 .previewStatus { color: #d8c08e; font-family: 'DM Mono', monospace; font-size: 9px; text-transform: uppercase; white-space: nowrap; }
 .importPreview { max-width: 780px; padding-top: 42px; }
-.importTotals { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); }
+.importClassification { display: grid; gap: 6px; margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line); border-left: 2px solid var(--blue); background: rgba(105, 133, 232, .06); }
+.importClassification strong { color: #e7ebf4; font-size: 12px; }
+.importClassification span { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.importClassification.summary { border-left-color: #d8ad62; background: rgba(177, 126, 49, .08); }
+.importClassification.mixed { border-left-color: #d8ad62; }
+.importClassification.unknown { border-left-color: #8d6a76; background: rgba(141, 106, 118, .08); }
+.importTotals { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); }
 .importTotals div { display: grid; gap: 5px; padding: 17px 0; border-right: 1px solid var(--line); }
 .importTotals div:not(:first-child) { padding-left: 18px; }
 .importTotals div:last-child { border-right: 0; }
@@ -319,6 +325,12 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .importSheetHeader strong { margin-bottom: 5px; font-size: 13px; }
 .importSheetHeader span { color: #758099; font-size: 10px; }
 .importSheetHeader b { font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 400; white-space: nowrap; }
+.importBlocked { display: grid; gap: 6px; margin: 13px 0 8px; padding: 13px 14px; border: 1px solid var(--line); background: rgba(177, 126, 49, .06); }
+.importBlocked strong { color: #d8c08e; font-size: 10px; }
+.importBlocked span, .importBlocked small { color: #758099; font-size: 10px; line-height: 1.55; }
+.importBlocked small { color: #9a8d70; }
+.importBlocked.unknown { background: rgba(141, 106, 118, .06); }
+.importBlocked.unknown strong { color: #c79aaa; }
 .importMapping { display: flex; flex-wrap: wrap; gap: 8px; padding: 13px 0; }
 .importMapping span { display: inline-flex; gap: 5px; padding: 5px 7px; border: 1px solid var(--line); color: #8590a8; font-size: 9px; }
 .importMapping b { color: #cbd2e1; font-weight: 600; }
@@ -445,7 +457,8 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
   .dataImportControls .secondaryButton { width: 100%; }
   .importTotals { grid-template-columns: repeat(2, 1fr); }
   .importTotals div:nth-child(2) { border-right: 0; }
-  .importTotals div:nth-child(3), .importTotals div:nth-child(4) { border-top: 1px solid var(--line); }
+  .importTotals div:nth-child(3), .importTotals div:nth-child(4), .importTotals div:nth-child(5) { border-top: 1px solid var(--line); }
+  .importTotals div:nth-child(4), .importTotals div:nth-child(5) { border-right: 0; }
   .importRow { grid-template-columns: 24px minmax(0, 1fr) auto; padding: 8px 0; }
   .importRow em { grid-column: 2 / -1; }
 }

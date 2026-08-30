@@ -990,20 +990,36 @@ function DataView({ session, accountName, onLogout }) {
                   <div><p className="eyebrow">PRÉVIA</p><h2 id="preview-title">{preview.filename}</h2></div>
                   <span className="previewStatus">somente leitura</span>
                 </div>
+                <div className={`importClassification ${preview.workbook_type || "unknown"}`}>
+                  <strong>{preview.workbook_label || "Formato não reconhecido"}</strong>
+                  <span>{preview.workbook_message || "Revise a estrutura antes de importar."}</span>
+                </div>
                 <div className="importTotals">
                   <div><strong>{preview.total_sheets}</strong><span>abas</span></div>
-                  <div><strong>{preview.total_rows}</strong><span>linhas</span></div>
+                  <div><strong>{preview.total_rows}</strong><span>linhas importáveis</span></div>
                   <div><strong className="validText">{preview.valid_rows}</strong><span>válidas</span></div>
                   <div><strong className={preview.invalid_rows ? "invalidText" : "validText"}>{preview.invalid_rows}</strong><span>com atenção</span></div>
+                  <div><strong>{preview.ignored_rows || 0}</strong><span>fora do fluxo</span></div>
                 </div>
                 <div className="importSheets">
                   {preview.sheets.map((sheet) => (
                     <article className="importSheet" key={sheet.name}>
                       <div className="importSheetHeader">
-                        <div><strong>{sheet.name}</strong><span>{sheet.total_rows} linhas · {sheet.valid_rows} válidas</span></div>
-                        <b className={sheet.invalid_rows ? "invalidText" : "validText"}>{sheet.invalid_rows ? `${sheet.invalid_rows} atenção` : "Pronta"}</b>
+                        <div>
+                          <strong>{sheet.name}</strong>
+                          <span>{sheet.type === "transactions" ? `${sheet.total_rows} linhas · ${sheet.valid_rows} válidas` : sheet.classification?.type === "summary" ? `${sheet.ignored_rows || 0} linhas mantidas fora da importação` : "Revisão necessária"}</span>
+                        </div>
+                        <b className={sheet.type === "transactions" && sheet.invalid_rows ? "invalidText" : sheet.type === "transactions" ? "validText" : "invalidText"}>
+                          {sheet.type === "transactions" ? (sheet.invalid_rows ? `${sheet.invalid_rows} atenção` : "Pronta") : sheet.type === "summary" ? "Resumo" : "Revisar"}
+                        </b>
                       </div>
-                      {sheet.errors.length > 0 ? (
+                      {sheet.type !== "transactions" ? (
+                        <div className={`importBlocked ${sheet.type}`}>
+                          <strong>{sheet.type === "summary" ? "Não importar como movimentação" : "Não foi possível identificar com segurança"}</strong>
+                          <span>{sheet.classification?.reason || "A estrutura desta aba precisa de revisão manual."}</span>
+                          {sheet.ignored_rows > 0 && <small>{sheet.ignored_rows} linhas foram preservadas fora da prévia para evitar lançamentos incorretos.</small>}
+                        </div>
+                      ) : sheet.errors.length > 0 ? (
                         <p className="importError">{sheet.errors.join(" · ")}</p>
                       ) : (
                         <>
