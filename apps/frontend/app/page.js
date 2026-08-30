@@ -200,6 +200,7 @@ function RegisterView({ session, accountName, onLogout }) {
   const [pendingAmount, setPendingAmount] = useState("");
   const [pendingDirection, setPendingDirection] = useState("expense");
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const [preferredCategoryId, setPreferredCategoryId] = useState("");
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryKind, setNewCategoryKind] = useState("expense");
   const [categoryBusy, setCategoryBusy] = useState(false);
@@ -253,7 +254,9 @@ function RegisterView({ session, accountName, onLogout }) {
     setPendingDescription(movement.description);
     setPendingAmount(String(movement.amount));
     setPendingDirection(movement.direction);
-    setSelectedCategoryId("");
+    const preferredCategory = categories.find((category) => category.id === preferredCategoryId);
+    const preferredIsCompatible = preferredCategory && (preferredCategory.kind === "both" || preferredCategory.kind === movement.direction);
+    setSelectedCategoryId(preferredIsCompatible ? preferredCategory.id : "");
     setNewCategoryName("");
     setNewCategoryKind(movement.direction);
     setNotice("");
@@ -266,6 +269,23 @@ function RegisterView({ session, accountName, onLogout }) {
     if (selectedCategory && selectedCategory.kind !== "both" && selectedCategory.kind !== direction) {
       setSelectedCategoryId("");
     }
+  }
+
+  function selectQuickCategory(category) {
+    if (!pendingMovement) {
+      setPreferredCategoryId(category.id);
+      setNotice(`“${category.name}” será sugerida no próximo registro`);
+      return;
+    }
+
+    if (category.kind !== "both" && category.kind !== pendingDirection) {
+      setNotice(`“${category.name}” é uma categoria de ${category.kind === "income" ? "recebimentos" : "gastos"}.`);
+      return;
+    }
+
+    setSelectedCategoryId(category.id);
+    setPreferredCategoryId(category.id);
+    setNotice(`Categoria “${category.name}” selecionada`);
   }
 
   async function createCategory() {
@@ -618,11 +638,16 @@ function RegisterView({ session, accountName, onLogout }) {
               {categories.length === 0 ? (
                 <p className="emptyState">Nenhuma categoria criada.</p>
               ) : categories.slice(0, 6).map((category) => (
-                <div className="quickCategory" key={category.id}>
+                <button
+                  className={category.id === (pendingMovement ? selectedCategoryId : preferredCategoryId) ? "quickCategory selected" : "quickCategory"}
+                  type="button"
+                  onClick={() => selectQuickCategory(category)}
+                  aria-pressed={category.id === (pendingMovement ? selectedCategoryId : preferredCategoryId)}
+                >
                   <span className="categoryDot" />
                   <strong>{category.name}</strong>
                   <span>{categoryKindLabel(category.kind)}</span>
-                </div>
+                </button>
               ))}
             </div>
             <a className="asideLink" href="/categorias">Gerenciar categorias <span>→</span></a>
@@ -812,7 +837,7 @@ function CategoriesView({ session, accountName, onLogout }) {
             <p className="eyebrow">RESUMO</p>
             <h2 id="category-summary-title">Organização simples.</h2>
             <strong className="categoryTotal">{categories.length}</strong>
-            <span className="categoryTotalLabel">categorias ativas</span>
+            <span className="categoryTotalLabel">categorias criadas</span>
             <div className="summaryRows">
               <div><span>Para gastos</span><b>{expenseCategoryCount}</b></div>
               <div><span>Para recebimentos</span><b>{incomeCategoryCount}</b></div>
@@ -946,9 +971,9 @@ export default function Home({ view = "dashboard" }) {
             <p className="eyebrow">SUA VISÃO FINANCEIRA</p>
             <h1>Seu dinheiro, à frente.</h1>
           </div>
-          <button className="periodButton" type="button" aria-label="Período atual">
+          <div className="periodButton" aria-label="Período atual">
             <span className="periodIcon" /> {formatMonth(dashboard?.month)} <b>—</b> {formatMonth(dashboard?.next_month)}
-          </button>
+          </div>
         </header>
 
         <section className="comparison" aria-labelledby="comparison-title">

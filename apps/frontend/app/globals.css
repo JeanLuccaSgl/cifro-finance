@@ -46,7 +46,7 @@ a { color: inherit; text-decoration: none; }
 h1, h2, p { margin-top: 0; }
 h1 { margin-bottom: 0; color: #f2f4fa; font-size: clamp(27px, 3vw, 31px); line-height: 1.15; letter-spacing: -1.1px; }
 h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
-.periodButton { display: flex; align-items: center; gap: 8px; border: 0; color: #a5aec3; background: transparent; font-size: 10px; letter-spacing: .08em; cursor: pointer; }
+.periodButton { display: flex; align-items: center; gap: 8px; color: #a5aec3; font-size: 10px; letter-spacing: .08em; }
 .periodButton b { color: #515a70; font-weight: 400; }
 .periodIcon { display: inline-block; width: 29px; height: 29px; margin-right: 7px; border: 1px solid var(--line); border-radius: 7px; position: relative; }
 .periodIcon::after { content: ''; position: absolute; inset: 8px; border: 1px solid #7986a6; border-radius: 50%; }
@@ -202,7 +202,8 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .asideHeading h2, .categorySummary h2 { font-size: 21px; letter-spacing: -.8px; }
 .asideDescription { margin: 16px 0 20px; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .quickCategoryList { display: grid; }
-.quickCategory { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 9px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+.quickCategory { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 9px; align-items: center; width: 100%; padding: 12px 0; border: 0; border-bottom: 1px solid var(--line-soft); color: var(--ink); background: transparent; text-align: left; cursor: pointer; }
+.quickCategory:hover, .quickCategory.selected { background: rgba(118, 149, 255, .06); }
 .quickCategory strong { overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 .quickCategory span:last-child { grid-column: 2; color: #6f7a91; font-size: 9px; }
 .quickCategory .categoryDot { grid-row: 1 / span 2; }
