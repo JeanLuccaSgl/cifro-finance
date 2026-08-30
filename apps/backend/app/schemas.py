@@ -150,6 +150,19 @@ class CommitmentRecordResult(BaseModel):
     commitment: CommitmentRead
 
 
+class UserSettingsRead(BaseModel):
+    auto_confirm_income: bool
+    default_due_rule: CommitmentDueRule
+    default_business_day_number: int
+    updated_at: datetime
+
+
+class UserSettingsUpdate(BaseModel):
+    auto_confirm_income: bool
+    default_due_rule: CommitmentDueRule
+    default_business_day_number: int = Field(gt=0, le=31)
+
+
 class DashboardPeriod(BaseModel):
     income: Decimal
     expenses: Decimal

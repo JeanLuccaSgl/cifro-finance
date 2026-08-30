@@ -27,6 +27,8 @@ from .schemas import (
     TransactionCreate,
     TransactionRead,
     TransactionUpdate,
+    UserSettingsRead,
+    UserSettingsUpdate,
 )
 from .security import current_user_id
 
@@ -168,6 +170,62 @@ def next_commitment_due_date(row: dict) -> date | None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "cifro-api"}
+
+
+@router.get("/settings", response_model=UserSettingsRead)
+def get_user_settings(user_id: UUID = Depends(current_user_id)) -> dict:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            select auto_confirm_income, default_due_rule,
+              default_business_day_number, updated_at
+            from public.user_settings
+            where user_id = %s
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row:
+            row = connection.execute(
+                """
+                insert into public.user_settings (user_id)
+                values (%s)
+                returning auto_confirm_income, default_due_rule,
+                  default_business_day_number, updated_at
+                """,
+                (user_id,),
+            ).fetchone()
+    return row
+
+
+@router.patch("/settings", response_model=UserSettingsRead)
+def update_user_settings(
+    payload: UserSettingsUpdate,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            insert into public.user_settings (
+              user_id, auto_confirm_income, default_due_rule,
+              default_business_day_number, updated_at
+            )
+            values (%s, %s, %s, %s, now())
+            on conflict (user_id) do update set
+              auto_confirm_income = excluded.auto_confirm_income,
+              default_due_rule = excluded.default_due_rule,
+              default_business_day_number = excluded.default_business_day_number,
+              updated_at = now()
+            returning auto_confirm_income, default_due_rule,
+              default_business_day_number, updated_at
+            """,
+            (
+                user_id,
+                payload.auto_confirm_income,
+                payload.default_due_rule.value,
+                payload.default_business_day_number,
+            ),
+        ).fetchone()
+    return row
 
 
 @router.get("/categories", response_model=list[CategoryRead])

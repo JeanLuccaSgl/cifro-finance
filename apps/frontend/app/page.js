@@ -210,6 +210,7 @@ function Sidebar({ active, accountName, onLogout }) {
         <a className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</a>
         <a className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejamento</a>
         <a className={active === "categories" ? "navItem active" : "navItem"} href="/categorias">Categorias</a>
+        <a className={active === "settings" ? "navItem active" : "navItem"} href="/configuracoes">Configurações</a>
       </nav>
 
       <div className="account">
@@ -715,9 +716,134 @@ const emptyCommitment = {
   current_installment: "1",
 };
 
+function SettingsView({ session, accountName, onLogout }) {
+  const [settings, setSettings] = useState(null);
+  const [draft, setDraft] = useState({ auto_confirm_income: false, default_due_rule: "fixed_day", default_business_day_number: 5 });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    apiRequest("/api/v1/settings", session)
+      .then((data) => {
+        setSettings(data);
+        setDraft({
+          auto_confirm_income: data.auto_confirm_income,
+          default_due_rule: data.default_due_rule,
+          default_business_day_number: data.default_business_day_number,
+        });
+      })
+      .catch((error) => setNotice(error.message))
+      .finally(() => setLoading(false));
+  }, [session]);
+
+  async function saveSettings(event) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const data = await apiRequest("/api/v1/settings", session, {
+        method: "PATCH",
+        body: JSON.stringify({
+          auto_confirm_income: draft.auto_confirm_income,
+          default_due_rule: draft.default_due_rule,
+          default_business_day_number: Number(draft.default_business_day_number),
+        }),
+      });
+      setSettings(data);
+      setDraft({
+        auto_confirm_income: data.auto_confirm_income,
+        default_due_rule: data.default_due_rule,
+        default_business_day_number: data.default_business_day_number,
+      });
+      setNotice("Configurações salvas");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="shell">
+      <Sidebar active="settings" accountName={accountName} onLogout={onLogout} />
+      <section className="content settingsContent">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">CONFIGURAÇÕES</p>
+            <h1>Defina como o Cifro deve pensar.</h1>
+          </div>
+          <a className="backLink" href="/">← Visão geral</a>
+        </header>
+
+        <div className="settingsLayout">
+          <form className="settingsMain" onSubmit={saveSettings}>
+            <section className="settingsIntro">
+              <p className="eyebrow">PREFERÊNCIAS</p>
+              <h2>Pequenos parâmetros. Mais clareza.</h2>
+              <p>Estas escolhas orientam novos planejamentos e a futura automação do Cifro. Elas não alteram registros que já aconteceram.</p>
+            </section>
+
+            <section className="settingsSection" aria-labelledby="automation-title">
+              <div className="settingsSectionHeading">
+                <div><p className="eyebrow">AUTOMAÇÃO</p><h2 id="automation-title">Recebimentos recorrentes</h2></div>
+                <span className="settingsBadge">preparação</span>
+              </div>
+              <label className="settingToggle">
+                <input type="checkbox" checked={draft.auto_confirm_income} onChange={(event) => setDraft((current) => ({ ...current, auto_confirm_income: event.target.checked }))} />
+                <span className="toggleTrack" aria-hidden="true"><i /></span>
+                <span className="settingCopy"><strong>Confirmar automaticamente</strong><small>Quando o processamento automático estiver ativo, recebimentos como salário poderão virar concluídos na data prevista.</small></span>
+              </label>
+              <p className="settingsWarning">Por segurança, essa opção ainda não executa ocorrências sozinha. Até o motor automático ser ativado, o botão Registrar continua exigindo sua confirmação.</p>
+            </section>
+
+            <section className="settingsSection" aria-labelledby="defaults-title">
+              <div className="settingsSectionHeading">
+                <div><p className="eyebrow">NOVOS PLANEJAMENTOS</p><h2 id="defaults-title">Padrão para datas</h2></div>
+              </div>
+              <div className="settingsFields">
+                <label className="settingsField">
+                  <span>Regra padrão</span>
+                  <select value={draft.default_due_rule} onChange={(event) => setDraft((current) => ({ ...current, default_due_rule: event.target.value }))}>
+                    <option value="fixed_day">Dia fixo do mês</option>
+                    <option value="business_day">Dia útil do mês</option>
+                  </select>
+                </label>
+                {draft.default_due_rule === "business_day" && (
+                  <label className="settingsField">
+                    <span>Número do dia útil</span>
+                    <input type="number" min="1" max="31" step="1" value={draft.default_business_day_number} onChange={(event) => setDraft((current) => ({ ...current, default_business_day_number: event.target.value }))} />
+                  </label>
+                )}
+              </div>
+              <div className="businessDayNote"><strong>Regra atual</strong><span>Segunda a sábado contam como dias úteis. Domingo não conta. Feriados ainda não são considerados.</span></div>
+            </section>
+
+            {notice && <p className="notice" role="status">{notice}</p>}
+            <div className="settingsActions"><span>{loading ? "Carregando preferências..." : settings ? "Preferências salvas por usuário." : ""}</span><button className="confirmButton" type="submit" disabled={busy || loading}>{busy ? "Salvando..." : "Salvar configurações"}</button></div>
+          </form>
+
+          <aside className="settingsSummary" aria-labelledby="settings-summary-title">
+            <p className="eyebrow">RESUMO</p>
+            <h2 id="settings-summary-title">Seu Cifro, suas regras.</h2>
+            <div className="settingsSummaryValue">{draft.auto_confirm_income ? "Automático" : "Manual"}</div>
+            <span className="settingsSummaryLabel">confirmação de recebimentos</span>
+            <div className="summaryRows">
+              <div><span>Datas padrão</span><b>{draft.default_due_rule === "business_day" ? `${draft.default_business_day_number}º útil` : "Dia fixo"}</b></div>
+              <div><span>Sábado</span><b>Conta</b></div>
+              <div><span>Domingo</span><b>Não conta</b></div>
+            </div>
+            <a className="asideLink" href="/planejamento">Abrir planejamento <span>→</span></a>
+          </aside>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function PlanningView({ session, accountName, onLogout }) {
   const [commitments, setCommitments] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [settings, setSettings] = useState(null);
   const [form, setForm] = useState(emptyCommitment);
   const [editingId, setEditingId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -728,12 +854,19 @@ function PlanningView({ session, accountName, onLogout }) {
   async function loadPlanning() {
     setLoading(true);
     try {
-      const [commitmentData, categoryData] = await Promise.all([
+      const [commitmentData, categoryData, settingsData] = await Promise.all([
         apiRequest("/api/v1/commitments", session),
         apiRequest("/api/v1/categories", session),
+        apiRequest("/api/v1/settings", session),
       ]);
       setCommitments(commitmentData);
       setCategories(categoryData);
+      setSettings(settingsData);
+      setForm((current) => current.name || current.starts_on ? current : {
+        ...emptyCommitment,
+        due_rule: settingsData.default_due_rule,
+        business_day_number: String(settingsData.default_business_day_number),
+      });
     } catch (error) {
       setNotice(error.message);
     } finally {
@@ -853,7 +986,11 @@ function PlanningView({ session, accountName, onLogout }) {
       }
       await loadPlanning();
       setEditingId(null);
-      setForm(emptyCommitment);
+      setForm({
+        ...emptyCommitment,
+        due_rule: settings?.default_due_rule || "fixed_day",
+        business_day_number: String(settings?.default_business_day_number || 5),
+      });
     } catch (error) {
       setNotice(error.message);
     } finally {
@@ -1350,6 +1487,10 @@ export default function Home({ view = "dashboard" }) {
 
   if (view === "planning") {
     return <PlanningView session={session} accountName={accountName} onLogout={handleLogout} />;
+  }
+
+  if (view === "settings") {
+    return <SettingsView session={session} accountName={accountName} onLogout={handleLogout} />;
   }
 
   const current = dashboard?.current || { income: 0, expenses: 0, available: 0 };
