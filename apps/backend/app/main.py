@@ -17,6 +17,8 @@ from .schemas import (
     CategoryUpdate,
     CommitmentCreate,
     CommitmentRead,
+    CommitmentRecordCreate,
+    CommitmentRecordResult,
     CommitmentPreview,
     CommitmentUpdate,
     DashboardPeriod,
@@ -142,6 +144,24 @@ def next_projected_commitment_date(row: dict, from_date: date) -> date | None:
         if projected and projected >= from_date:
             return projected
         year, month = next_month(year, month)
+    return None
+
+
+def next_commitment_due_date(row: dict) -> date | None:
+    """Advance a commitment one occurrence after its stored due date."""
+    current = row["next_due_on"]
+    if row["frequency"] == "monthly":
+        year, month = next_month(current.year, current.month)
+        if row["due_rule"] == "business_day":
+            return business_day_date(year, month, row["business_day_number"])
+        return date(year, month, min(row["starts_on"].day, monthrange(year, month)[1]))
+
+    if row["frequency"] == "yearly":
+        year = current.year + 1
+        if row["due_rule"] == "business_day":
+            return business_day_date(year, current.month, row["business_day_number"])
+        return date(year, current.month, min(row["starts_on"].day, monthrange(year, current.month)[1]))
+
     return None
 
 
@@ -366,6 +386,119 @@ def update_commitment(
         raise HTTPException(status_code=404, detail="Commitment not found")
     row["category_name"] = category_name
     return row
+
+
+@router.post("/commitments/{commitment_id}/record", response_model=CommitmentRecordResult)
+def record_commitment(
+    commitment_id: UUID,
+    payload: CommitmentRecordCreate,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    with get_connection() as connection:
+        commitment = connection.execute(
+            """
+            select
+              id, user_id, category_id, name, commitment_type, direction, amount,
+              frequency, due_rule, business_day_number, starts_on, next_due_on,
+              ends_on, total_installments, current_installment, is_active, created_at
+            from public.commitments
+            where id = %s and user_id = %s and is_active = true
+            for update
+            """,
+            (commitment_id, user_id),
+        ).fetchone()
+
+        if not commitment:
+            raise HTTPException(status_code=404, detail="Commitment not found")
+
+        scheduled_due_on = next_projected_commitment_date(commitment, date.today())
+        if scheduled_due_on is None or commitment["commitment_type"] == "installment":
+            scheduled_due_on = commitment["next_due_on"]
+        occurrence_on = payload.occurred_on or scheduled_due_on
+        duplicate = connection.execute(
+            """
+            select id
+            from public.transactions
+            where commitment_id = %s and user_id = %s
+              and occurred_on = %s and status = 'completed'
+            limit 1
+            """,
+            (commitment_id, user_id, occurrence_on),
+        ).fetchone()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="This commitment occurrence is already recorded")
+
+        transaction = connection.execute(
+            """
+            insert into public.transactions (
+              user_id, category_id, commitment_id, description, amount,
+              direction, occurred_on, status, notes
+            )
+            values (%s, %s, %s, %s, %s, %s, %s, 'completed', %s)
+            returning id, description, amount, direction, occurred_on,
+              category_id, commitment_id, status, notes, created_at, updated_at
+            """,
+            (
+                user_id,
+                commitment["category_id"],
+                commitment_id,
+                commitment["name"],
+                commitment["amount"],
+                commitment["direction"],
+                occurrence_on,
+                "Registrado a partir do planejamento",
+            ),
+        ).fetchone()
+
+        commitment_for_advance = dict(commitment)
+        commitment_for_advance["next_due_on"] = scheduled_due_on
+        next_due_on = next_commitment_due_date(commitment_for_advance)
+        is_installment = commitment["commitment_type"] == "installment"
+        current_installment = commitment["current_installment"]
+        if is_installment and current_installment >= commitment["total_installments"]:
+            is_active = False
+        else:
+            is_active = next_due_on is not None and not (
+                commitment["ends_on"] and next_due_on > commitment["ends_on"]
+            )
+
+        if is_installment and is_active:
+            current_installment += 1
+
+        updated_commitment = connection.execute(
+            """
+            update public.commitments
+            set next_due_on = %s, current_installment = %s, is_active = %s
+            where id = %s and user_id = %s
+            returning id, name, commitment_type, direction, amount, frequency,
+              due_rule, business_day_number, starts_on, next_due_on, ends_on,
+              category_id, total_installments, current_installment,
+              is_active, created_at
+            """,
+            (
+                next_due_on or commitment["next_due_on"],
+                current_installment,
+                is_active,
+                commitment_id,
+                user_id,
+            ),
+        ).fetchone()
+
+        category_name = None
+        if commitment["category_id"]:
+            category = connection.execute(
+                """
+                select name
+                from public.categories
+                where id = %s and user_id = %s
+                """,
+                (commitment["category_id"], user_id),
+            ).fetchone()
+            category_name = category["name"] if category else None
+
+    transaction["category_name"] = category_name
+    updated_commitment["category_name"] = category_name
+    return {"transaction": transaction, "commitment": updated_commitment}
 
 
 @router.delete("/commitments/{commitment_id}", status_code=status.HTTP_204_NO_CONTENT)

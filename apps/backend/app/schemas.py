@@ -141,6 +141,15 @@ class CommitmentRead(CommitmentCreate):
     category_name: str | None = None
 
 
+class CommitmentRecordCreate(BaseModel):
+    occurred_on: date | None = None
+
+
+class CommitmentRecordResult(BaseModel):
+    transaction: TransactionRead
+    commitment: CommitmentRead
+
+
 class DashboardPeriod(BaseModel):
     income: Decimal
     expenses: Decimal

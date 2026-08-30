@@ -722,6 +722,7 @@ function PlanningView({ session, accountName, onLogout }) {
   const [editingId, setEditingId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [recordingId, setRecordingId] = useState(null);
   const [notice, setNotice] = useState("");
 
   async function loadPlanning() {
@@ -857,6 +858,27 @@ function PlanningView({ session, accountName, onLogout }) {
       setNotice(error.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function recordCommitment(commitment) {
+    const action = commitment.direction === "income" ? "recebimento" : "pagamento";
+    if (!window.confirm(`Registrar este ${action} de ${formatCurrency(commitment.amount)} como uma movimentação real?`)) return;
+
+    setRecordingId(commitment.id);
+    try {
+      const result = await apiRequest(`/api/v1/commitments/${commitment.id}/record`, session, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      setCommitments((current) => result.commitment.is_active
+        ? current.map((item) => item.id === result.commitment.id ? result.commitment : item)
+        : current.filter((item) => item.id !== result.commitment.id));
+      setNotice(`${commitment.direction === "income" ? "Recebimento" : "Pagamento"} registrado`);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setRecordingId(null);
     }
   }
 
@@ -1011,7 +1033,7 @@ function PlanningView({ session, accountName, onLogout }) {
                       <span>{commitment.commitment_type === "subscription" ? "Assinatura" : commitment.commitment_type === "installment" ? `Parcela ${commitment.current_installment}/${commitment.total_installments}` : "Recorrente"} · {commitment.category_name || "Sem categoria"} · {commitment.due_rule === "business_day" ? `${commitment.business_day_number}º dia útil` : `dia ${commitment.next_due_on.slice(8, 10)}`} · {formatScheduleDate(commitment.next_due_on)}</span>
                     </div>
                     <b className={commitment.direction === "income" ? "income" : "expense"}>{commitment.direction === "income" ? "+" : "−"} {formatCurrency(commitment.amount)}</b>
-                    <div className="rowActions"><button type="button" onClick={() => startEditing(commitment)}>Editar</button><button type="button" onClick={() => removeCommitment(commitment)}>Excluir</button></div>
+                    <div className="rowActions"><button type="button" onClick={() => recordCommitment(commitment)} disabled={recordingId === commitment.id}>{recordingId === commitment.id ? "Registrando..." : "Registrar"}</button><button type="button" onClick={() => startEditing(commitment)}>Editar</button><button type="button" onClick={() => removeCommitment(commitment)}>Excluir</button></div>
                   </div>
                 ))}
               </div>
