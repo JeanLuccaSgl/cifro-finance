@@ -15,7 +15,10 @@ from .schemas import (
     CategoryCreate,
     CategoryRead,
     CategoryUpdate,
+    CommitmentCreate,
+    CommitmentRead,
     CommitmentPreview,
+    CommitmentUpdate,
     DashboardPeriod,
     DashboardRead,
     Direction,
@@ -58,8 +61,88 @@ def next_month(year: int, month: int) -> tuple[int, int]:
     return (year + 1, 1) if month == 12 else (year, month + 1)
 
 
+def business_day_date(year: int, month: int, ordinal: int) -> date | None:
+    """Return the Nth Monday-Saturday day of a month; Sunday is excluded."""
+    business_days = 0
+    for day in range(1, monthrange(year, month)[1] + 1):
+        candidate = date(year, month, day)
+        if candidate.weekday() == 6:
+            continue
+        business_days += 1
+        if business_days == ordinal:
+            return candidate
+    return None
+
+
+def first_business_occurrence(start: date, ordinal: int) -> date | None:
+    """Find the first Nth-business-day occurrence on or after a start date."""
+    year, month = start.year, start.month
+    for _ in range(24):
+        candidate = business_day_date(year, month, ordinal)
+        if candidate and candidate >= start:
+            return candidate
+        year, month = next_month(year, month)
+    return None
+
+
 def as_money(value: Decimal | None) -> Decimal:
     return value or Decimal("0.00")
+
+
+def projected_commitment_date(row: dict, year: int, month: int) -> date | None:
+    """Return the occurrence of a commitment inside the requested month.
+
+    Recurring commitments are rules, not duplicated transaction rows. Their
+    stored due date supplies the billing day, while the dashboard projects the
+    next occurrence into the selected month.
+    """
+    baseline = row["next_due_on"]
+    target_start, _ = month_bounds(year, month)
+    baseline_start, _ = month_bounds(baseline.year, baseline.month)
+    if target_start < baseline_start:
+        return None
+
+    if row["commitment_type"] == "installment":
+        return baseline if baseline.year == year and baseline.month == month else None
+
+    if row["frequency"] == "monthly":
+        if row["due_rule"] == "business_day":
+            projected = business_day_date(year, month, row["business_day_number"])
+        else:
+            day = min(baseline.day, monthrange(year, month)[1])
+            projected = date(year, month, day)
+    elif row["frequency"] == "yearly":
+        if baseline.month != month:
+            return None
+        if row["due_rule"] == "business_day":
+            projected = business_day_date(year, month, row["business_day_number"])
+        else:
+            day = min(baseline.day, monthrange(year, month)[1])
+            projected = date(year, month, day)
+    else:
+        return None
+
+    if projected is None:
+        return None
+    if projected < row["starts_on"]:
+        return None
+    if row["ends_on"] and projected > row["ends_on"]:
+        return None
+    return projected
+
+
+def next_projected_commitment_date(row: dict, from_date: date) -> date | None:
+    """Find the next visible occurrence without creating future transactions."""
+    if row["commitment_type"] == "installment":
+        return row["next_due_on"] if row["next_due_on"] >= from_date else None
+
+    year, month = from_date.year, from_date.month
+    for _ in range(24):
+        projected = projected_commitment_date(row, year, month)
+        if projected and projected >= from_date:
+            return projected
+        year, month = next_month(year, month)
+    return None
 
 
 @app.get("/health")
@@ -137,6 +220,168 @@ def delete_category(category_id: UUID, user_id: UUID = Depends(current_user_id))
 
     if not row:
         raise HTTPException(status_code=404, detail="Category not found")
+
+
+def category_for_commitment(connection, category_id: UUID | None, user_id: UUID) -> str | None:
+    if not category_id:
+        return None
+
+    category = connection.execute(
+        """
+        select name
+        from public.categories
+        where id = %s and user_id = %s and is_active = true
+        """,
+        (category_id, user_id),
+    ).fetchone()
+    if not category:
+        raise HTTPException(status_code=400, detail="Category not found")
+    return category["name"]
+
+
+@router.get("/commitments", response_model=list[CommitmentRead])
+def list_commitments(user_id: UUID = Depends(current_user_id)) -> list[dict]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            select
+              c.id, c.name, c.commitment_type, c.direction, c.amount,
+              c.frequency, c.due_rule, c.business_day_number,
+              c.starts_on, c.next_due_on, c.ends_on,
+              c.category_id, c.total_installments, c.current_installment,
+              c.is_active, c.created_at, cat.name as category_name
+            from public.commitments c
+            left join public.categories cat
+              on cat.id = c.category_id and cat.user_id = c.user_id
+            where c.user_id = %s and c.is_active = true
+            order by c.next_due_on asc, c.name asc
+            """,
+            (user_id,),
+        ).fetchall()
+    commitments = []
+    for row in rows:
+        projected_date = next_projected_commitment_date(row, date.today())
+        if projected_date is None and row["commitment_type"] == "installment":
+            projected_date = row["next_due_on"]
+        if projected_date is None:
+            continue
+        projected = dict(row)
+        projected["next_due_on"] = projected_date
+        commitments.append(projected)
+    commitments.sort(key=lambda row: (row["next_due_on"], row["name"].lower()))
+    return commitments
+
+
+@router.post("/commitments", response_model=CommitmentRead, status_code=status.HTTP_201_CREATED)
+def create_commitment(payload: CommitmentCreate, user_id: UUID = Depends(current_user_id)) -> dict:
+    next_due_on = payload.next_due_on
+    if next_due_on is None:
+        next_due_on = first_business_occurrence(payload.starts_on, payload.business_day_number)
+        if next_due_on is None:
+            raise HTTPException(status_code=400, detail="Could not calculate the business-day occurrence")
+
+    with get_connection() as connection:
+        category_name = category_for_commitment(connection, payload.category_id, user_id)
+        row = connection.execute(
+            """
+            insert into public.commitments (
+              user_id, category_id, name, commitment_type, direction, amount,
+              frequency, due_rule, business_day_number,
+              starts_on, next_due_on, ends_on,
+              total_installments, current_installment
+            )
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            returning id, name, commitment_type, direction, amount, frequency,
+              due_rule, business_day_number, starts_on, next_due_on, ends_on, category_id,
+              total_installments, current_installment, is_active, created_at
+            """,
+            (
+                user_id,
+                payload.category_id,
+                payload.name.strip(),
+                payload.commitment_type.value,
+                payload.direction.value,
+                payload.amount,
+                payload.frequency.value,
+                payload.due_rule.value,
+                payload.business_day_number,
+                payload.starts_on,
+                next_due_on,
+                payload.ends_on,
+                payload.total_installments,
+                payload.current_installment,
+            ),
+        ).fetchone()
+    row["category_name"] = category_name
+    return row
+
+
+@router.patch("/commitments/{commitment_id}", response_model=CommitmentRead)
+def update_commitment(
+    commitment_id: UUID,
+    payload: CommitmentUpdate,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    next_due_on = payload.next_due_on
+    if next_due_on is None:
+        next_due_on = first_business_occurrence(payload.starts_on, payload.business_day_number)
+        if next_due_on is None:
+            raise HTTPException(status_code=400, detail="Could not calculate the business-day occurrence")
+
+    with get_connection() as connection:
+        category_name = category_for_commitment(connection, payload.category_id, user_id)
+        row = connection.execute(
+            """
+            update public.commitments
+            set category_id = %s, name = %s, commitment_type = %s,
+                direction = %s, amount = %s, frequency = %s,
+                due_rule = %s, business_day_number = %s,
+                starts_on = %s, next_due_on = %s, ends_on = %s,
+                total_installments = %s, current_installment = %s
+            where id = %s and user_id = %s and is_active = true
+            returning id, name, commitment_type, direction, amount, frequency,
+              due_rule, business_day_number, starts_on, next_due_on, ends_on, category_id,
+              total_installments, current_installment, is_active, created_at
+            """,
+            (
+                payload.category_id,
+                payload.name.strip(),
+                payload.commitment_type.value,
+                payload.direction.value,
+                payload.amount,
+                payload.frequency.value,
+                payload.due_rule.value,
+                payload.business_day_number,
+                payload.starts_on,
+                next_due_on,
+                payload.ends_on,
+                payload.total_installments,
+                payload.current_installment,
+                commitment_id,
+                user_id,
+            ),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Commitment not found")
+    row["category_name"] = category_name
+    return row
+
+
+@router.delete("/commitments/{commitment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_commitment(commitment_id: UUID, user_id: UUID = Depends(current_user_id)) -> None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            delete from public.commitments
+            where id = %s and user_id = %s
+            returning id
+            """,
+            (commitment_id, user_id),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Commitment not found")
 
 
 @router.get("/transactions", response_model=list[TransactionRead])
@@ -336,19 +581,20 @@ def dashboard(
             (user_id, next_start, next_end),
         ).fetchall()
 
-        commitments = connection.execute(
+        commitment_rows = connection.execute(
             """
             select
               c.id, c.name, c.amount, c.direction, c.commitment_type,
-              c.next_due_on, cat.name as category_name
+              c.frequency, c.due_rule, c.business_day_number,
+              c.starts_on, c.next_due_on, c.ends_on,
+              cat.name as category_name
             from public.commitments c
             left join public.categories cat
               on cat.id = c.category_id and cat.user_id = c.user_id
             where c.user_id = %s and c.is_active = true
-              and c.next_due_on >= %s and c.next_due_on < %s
             order by c.next_due_on asc, c.name asc
             """,
-            (user_id, next_start, next_end),
+            (user_id,),
         ).fetchall()
 
         recent = connection.execute(
@@ -366,6 +612,16 @@ def dashboard(
             """,
             (user_id,),
         ).fetchall()
+
+    commitments = []
+    for row in commitment_rows:
+        projected_date = projected_commitment_date(row, next_year, next_month_number)
+        if projected_date is None:
+            continue
+        projected = dict(row)
+        projected["next_due_on"] = projected_date
+        commitments.append(projected)
+    commitments.sort(key=lambda row: (row["next_due_on"], row["name"].lower()))
 
     current = {row["direction"]: as_money(row["total"]) for row in current_totals}
     planned = {row["direction"]: as_money(row["total"]) for row in planned_totals}

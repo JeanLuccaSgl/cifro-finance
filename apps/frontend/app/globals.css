@@ -74,6 +74,17 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .progressAccent { background: var(--blue); }
 .progressMeta { margin-top: 8px; color: #737d93; font-size: 9px; }
 .progressMeta span:last-child { color: #6d768c; }
+.commitmentPreview { margin-top: 22px; border-top: 1px solid var(--line); }
+.commitmentPreviewHeader, .commitmentPreviewRow { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; align-items: center; gap: 9px; }
+.commitmentPreviewHeader { padding: 12px 0 7px; color: #7c87a0; font-family: 'DM Mono', monospace; font-size: 9px; }
+.commitmentPreviewHeader a { justify-self: end; color: #aebdff; font-family: Manrope, Arial, sans-serif; font-size: 9px; }
+.commitmentPreviewRow { min-height: 29px; border-bottom: 1px solid var(--line-soft); color: #77839b; font-size: 9px; }
+.commitmentPreviewRow strong { overflow: hidden; text-overflow: ellipsis; color: #bfc6d6; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.commitmentPreviewRow b, .commitmentRow > b { font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; white-space: nowrap; }
+.commitmentPreviewRow b.income, .commitmentRow > b.income { color: var(--green); }
+.commitmentPreviewRow b.expense, .commitmentRow > b.expense { color: #c7ccd9; }
+.commitmentEmpty { margin: 22px 0 0; color: #68738b; font-size: 10px; line-height: 1.6; }
+.commitmentEmpty a { color: #aebdff; }
 .comparisonRail { position: absolute; z-index: 1; top: 92px; bottom: 24px; left: 50%; width: 1px; background: var(--line); }
 .comparisonRail span { position: absolute; top: 35%; left: 50%; display: grid; place-items: center; width: 28px; height: 28px; transform: translateX(-50%); border: 1px solid #27334e; border-radius: 50%; color: #8da7ff; background: #0b1225; font-size: 18px; }
 
@@ -218,6 +229,40 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .summaryRows { margin-top: 30px; border-top: 1px solid var(--line); }
 .summaryRows div { display: flex; justify-content: space-between; padding: 13px 0; border-bottom: 1px solid var(--line-soft); color: #8994aa; font-size: 10px; }
 .summaryRows b { color: var(--ink); font-family: 'DM Mono', monospace; font-weight: 500; }
+.planningContent { max-width: 1320px; }
+.planningIntro { max-width: 610px; padding: 70px 0 28px; }
+.planningIntro h2 { max-width: 570px; margin-bottom: 13px; font-size: clamp(25px, 4vw, 38px); letter-spacing: -1.5px; line-height: 1.12; }
+.planningIntro p:last-child { max-width: 510px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.planningLayout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 76px; align-items: start; }
+.planningMain { min-width: 0; }
+.planningForm { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 22px 0 20px; }
+.planningFormHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.planningFormHeader h3 { margin: 0; font-size: 17px; letter-spacing: -.5px; }
+.planningFields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; padding: 22px 0 8px; }
+.planningField { display: grid; gap: 7px; color: #9ca7bd; font-size: 10px; font-weight: 700; }
+.planningField small { color: #68738b; font-size: 9px; font-weight: 400; }
+.planningField input, .planningField select { width: 100%; min-height: 42px; padding: 0 11px; border: 1px solid #2b3854; border-radius: 4px; outline: 0; color: var(--ink); background: #0d1529; font-size: 11px; }
+.planningField input:focus, .planningField select:focus { border-color: var(--blue-bright); box-shadow: 0 0 0 3px rgba(118, 149, 255, .11); }
+.planningWide { grid-column: 1 / -1; }
+.planningHint { margin: 7px 0 0; color: #748099; font-size: 10px; line-height: 1.6; }
+.planningActions { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 20px; padding-top: 17px; border-top: 1px solid var(--line); color: #68738b; font-family: 'DM Mono', monospace; font-size: 9px; }
+.planningActions .confirmButton { white-space: nowrap; }
+.commitmentListSection { margin-top: 64px; }
+.commitmentList { display: grid; }
+.commitmentRow { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto auto; align-items: center; gap: 14px; min-height: 78px; border-bottom: 1px solid var(--line-soft); }
+.commitmentDate { display: grid; justify-items: center; align-content: center; min-height: 42px; border-right: 1px solid var(--line); }
+.commitmentDate strong { font-family: 'DM Mono', monospace; font-size: 15px; font-weight: 500; }
+.commitmentDate span { margin-top: 3px; color: #77839b; font-family: 'DM Mono', monospace; font-size: 8px; text-transform: uppercase; }
+.commitmentInfo { min-width: 0; }
+.commitmentInfo strong, .commitmentInfo span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commitmentInfo strong { margin-bottom: 5px; font-size: 12px; }
+.commitmentInfo span { color: #6e7890; font-size: 10px; }
+.planningSummary { position: sticky; top: 34px; margin-top: 70px; padding-left: 30px; }
+.planningSummary h2 { margin-bottom: 27px; font-size: 21px; letter-spacing: -.8px; }
+.planningRules { border-top: 1px solid var(--line); }
+.planningRules div { display: grid; gap: 6px; padding: 15px 0; border-bottom: 1px solid var(--line-soft); }
+.planningRules strong { font-size: 11px; }
+.planningRules span { color: #77839b; font-size: 10px; line-height: 1.6; }
 
 @media (max-width: 760px) {
   .authShell { display: block; }
@@ -237,15 +282,16 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
   .navItem.active { border-bottom-color: var(--blue); background: transparent; }
   .account { display: none; }
   .content { width: 100%; justify-self: auto; padding: 27px 20px 42px; }
-  .registrationLayout, .categoryLayout { display: block; }
-  .quickCategories, .categorySummary { margin-top: 58px; padding: 26px 0 0; border-top: 1px solid var(--line); }
+  .registrationLayout, .categoryLayout, .planningLayout { display: block; }
+  .quickCategories, .categorySummary, .planningSummary { margin-top: 58px; padding: 26px 0 0; border-top: 1px solid var(--line); }
   .quickCategories { position: static; }
+  .planningSummary { position: static; }
 }
 
 @media (min-width: 851px) and (max-width: 1100px) {
   .content { padding-right: 42px; padding-left: 42px; }
-  .registrationLayout, .categoryLayout { grid-template-columns: minmax(0, 1fr) 230px; gap: 42px; }
-  .quickCategories, .categorySummary { padding-left: 20px; }
+  .registrationLayout, .categoryLayout, .planningLayout { grid-template-columns: minmax(0, 1fr) 230px; gap: 42px; }
+  .quickCategories, .categorySummary, .planningSummary { padding-left: 20px; }
 }
 
 @media (max-width: 620px) {
@@ -283,4 +329,12 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
   .categoryKind { grid-column: 1; grid-row: 2; }
   .categoryRow .rowActions { grid-column: 2; grid-row: 1 / span 2; }
   .categoryRow > select { grid-column: 1; }
+  .planningFields { display: block; }
+  .planningField { margin-bottom: 13px; }
+  .planningActions { align-items: stretch; flex-direction: column; }
+  .planningActions .confirmButton { width: 100%; }
+  .commitmentRow { grid-template-columns: 43px minmax(0, 1fr) auto; gap: 9px; padding: 10px 0; }
+  .commitmentRow .rowActions { grid-column: 2 / -1; }
+  .commitmentRow > b { grid-column: 3; grid-row: 1; }
+  .commitmentInfo span { white-space: normal; line-height: 1.5; }
 }

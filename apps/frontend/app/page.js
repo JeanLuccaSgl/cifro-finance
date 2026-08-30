@@ -27,12 +27,46 @@ function formatDate(value) {
     .replace(".", "");
 }
 
+function formatScheduleDate(value) {
+  if (!value) return "sem data";
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "long", year: "numeric" })
+    .format(new Date(`${value}T12:00:00`));
+}
+
 function localDate() {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function toInputDate(value) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
+function businessDayDateForMonth(year, month, ordinal) {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  let count = 0;
+  for (let day = 1; day <= lastDay; day += 1) {
+    const candidate = new Date(year, month, day);
+    if (candidate.getDay() === 0) continue;
+    count += 1;
+    if (count === ordinal) return candidate;
+  }
+  return null;
+}
+
+function nextBusinessOccurrence(start, ordinal) {
+  if (!start || !Number.isInteger(Number(ordinal)) || Number(ordinal) < 1) return "";
+  const [year, month, day] = start.split("-").map(Number);
+  let cursor = new Date(year, month - 1, day);
+  for (let index = 0; index < 24; index += 1) {
+    const candidate = businessDayDateForMonth(cursor.getFullYear(), cursor.getMonth(), Number(ordinal));
+    if (candidate && candidate >= cursor) return toInputDate(candidate);
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+  return "";
 }
 
 function inferDirection(text) {
@@ -174,6 +208,7 @@ function Sidebar({ active, accountName, onLogout }) {
       <nav className="mainNav" aria-label="Navegação principal">
         <a className={active === "dashboard" ? "navItem active" : "navItem"} href="/">Visão geral</a>
         <a className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</a>
+        <a className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejamento</a>
         <a className={active === "categories" ? "navItem active" : "navItem"} href="/categorias">Categorias</a>
       </nav>
 
@@ -664,6 +699,341 @@ function categoryKindLabel(kind) {
   return "Gastos e recebimentos";
 }
 
+const emptyCommitment = {
+  name: "",
+  amount: "",
+  direction: "expense",
+  commitment_type: "recurring",
+  frequency: "monthly",
+  due_rule: "fixed_day",
+  business_day_number: "",
+  starts_on: "",
+  next_due_on: "",
+  ends_on: "",
+  category_id: "",
+  total_installments: "",
+  current_installment: "1",
+};
+
+function PlanningView({ session, accountName, onLogout }) {
+  const [commitments, setCommitments] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [form, setForm] = useState(emptyCommitment);
+  const [editingId, setEditingId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  async function loadPlanning() {
+    setLoading(true);
+    try {
+      const [commitmentData, categoryData] = await Promise.all([
+        apiRequest("/api/v1/commitments", session),
+        apiRequest("/api/v1/categories", session),
+      ]);
+      setCommitments(commitmentData);
+      setCategories(categoryData);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadPlanning();
+  }, [session]);
+
+  function updateForm(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function changeDirection(direction) {
+    const selected = categories.find((category) => category.id === form.category_id);
+    setForm((current) => ({
+      ...current,
+      direction,
+      category_id: selected && (selected.kind === "both" || selected.kind === direction) ? current.category_id : "",
+    }));
+  }
+
+  function changeCommitmentType(commitmentType) {
+    setForm((current) => ({
+      ...current,
+      commitment_type: commitmentType,
+      due_rule: commitmentType === "installment" ? "fixed_day" : current.due_rule,
+      business_day_number: commitmentType === "installment" ? "" : current.business_day_number,
+      total_installments: commitmentType === "installment" ? current.total_installments : "",
+      current_installment: commitmentType === "installment" ? (current.current_installment || "1") : "",
+    }));
+  }
+
+  function startEditing(commitment) {
+    setEditingId(commitment.id);
+    setForm({
+      name: commitment.name,
+      amount: String(commitment.amount),
+      direction: commitment.direction,
+      commitment_type: commitment.commitment_type,
+      frequency: commitment.frequency,
+      due_rule: commitment.due_rule,
+      business_day_number: commitment.business_day_number ? String(commitment.business_day_number) : "",
+      starts_on: commitment.starts_on,
+      next_due_on: commitment.next_due_on,
+      ends_on: commitment.ends_on || "",
+      category_id: commitment.category_id || "",
+      total_installments: commitment.total_installments ? String(commitment.total_installments) : "",
+      current_installment: commitment.current_installment ? String(commitment.current_installment) : "1",
+    });
+    setNotice("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEditing() {
+    setEditingId(null);
+    setForm(emptyCommitment);
+    setNotice("");
+  }
+
+  async function saveCommitment(event) {
+    event.preventDefault();
+    const amount = Number(String(form.amount).replace(",", "."));
+    const installmentTotal = form.commitment_type === "installment" ? Number(form.total_installments) : null;
+    const installmentCurrent = form.commitment_type === "installment" ? Number(form.current_installment) : null;
+    const businessDayNumber = form.due_rule === "business_day" ? Number(form.business_day_number) : null;
+
+    const automaticNextDue = form.due_rule === "business_day"
+      ? nextBusinessOccurrence(form.starts_on, businessDayNumber)
+      : form.next_due_on;
+
+    if (!form.name.trim() || !Number.isFinite(amount) || amount <= 0 || !isValidDateInput(form.starts_on) || !isValidDateInput(automaticNextDue)) {
+      setNotice("Preencha nome, valor e datas válidas para o compromisso.");
+      return;
+    }
+    if (form.ends_on && !isValidDateInput(form.ends_on)) {
+      setNotice("Confira a data final.");
+      return;
+    }
+    if (form.commitment_type === "installment" && (!Number.isInteger(installmentTotal) || !Number.isInteger(installmentCurrent) || installmentCurrent > installmentTotal)) {
+      setNotice("Informe parcelas válidas: a atual não pode passar do total.");
+      return;
+    }
+    if (form.due_rule === "business_day" && (!Number.isInteger(businessDayNumber) || businessDayNumber < 1 || businessDayNumber > 31)) {
+      setNotice("Informe qual dia útil deve ser usado, entre 1 e 31.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const payload = {
+        name: form.name.trim(),
+        amount,
+        direction: form.direction,
+        commitment_type: form.commitment_type,
+        frequency: form.frequency,
+        due_rule: form.due_rule,
+        business_day_number: businessDayNumber,
+        starts_on: form.starts_on,
+        next_due_on: automaticNextDue || null,
+        ends_on: form.ends_on || null,
+        category_id: form.category_id || null,
+        total_installments: installmentTotal,
+        current_installment: installmentCurrent,
+      };
+      await apiRequest(
+        editingId ? `/api/v1/commitments/${editingId}` : "/api/v1/commitments",
+        session,
+        { method: editingId ? "PATCH" : "POST", body: JSON.stringify(payload) },
+      );
+      if (editingId) {
+        setNotice("Compromisso atualizado");
+      } else {
+        setNotice("Compromisso adicionado ao planejamento");
+      }
+      await loadPlanning();
+      setEditingId(null);
+      setForm(emptyCommitment);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeCommitment(commitment) {
+    if (!window.confirm(`Excluir “${commitment.name}” do planejamento?`)) return;
+
+    try {
+      await apiRequest(`/api/v1/commitments/${commitment.id}`, session, { method: "DELETE" });
+      setCommitments((current) => current.filter((item) => item.id !== commitment.id));
+      if (editingId === commitment.id) cancelEditing();
+      setNotice("Compromisso excluído");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }
+
+  const compatibleCategories = categories.filter(
+    (category) => category.kind === "both" || category.kind === form.direction,
+  );
+  const automaticNextDue = form.due_rule === "business_day"
+    ? nextBusinessOccurrence(form.starts_on, form.business_day_number)
+    : form.next_due_on;
+
+  return (
+    <main className="shell">
+      <Sidebar active="planning" accountName={accountName} onLogout={onLogout} />
+      <section className="content planningContent">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">PLANEJAMENTO</p>
+            <h1>Organize o que ainda vai acontecer.</h1>
+          </div>
+          <a className="backLink" href="/">← Visão geral</a>
+        </header>
+
+        <div className="planningLayout">
+          <div className="planningMain">
+            <section className="planningIntro">
+              <p className="eyebrow">PRÓXIMOS COMPROMISSOS</p>
+              <h2>Antecipe cobranças, parcelas e recebimentos.</h2>
+              <p>Cadastre uma vez o que se repete. O Cifro projeta a ocorrência no próximo mês sem duplicar registros reais.</p>
+            </section>
+
+            <form className="planningForm" onSubmit={saveCommitment}>
+              <div className="planningFormHeader">
+                <div>
+                  <p className="eyebrow">{editingId ? "EDITAR" : "NOVO PLANEJAMENTO"}</p>
+                  <h3>{editingId ? "Ajuste este compromisso." : "O que deve entrar no futuro?"}</h3>
+                </div>
+                {editingId && <button className="cancelButton" type="button" onClick={cancelEditing}>Cancelar edição</button>}
+              </div>
+
+              <div className="planningFields">
+                <label className="planningField planningWide">
+                  <span>Nome</span>
+                  <input value={form.name} onChange={(event) => updateForm("name", event.target.value)} placeholder="Ex.: Salário, Netflix ou parcela do notebook" maxLength={120} required />
+                </label>
+                <label className="planningField">
+                  <span>Valor</span>
+                  <input type="number" min="0.01" step="0.01" value={form.amount} onChange={(event) => updateForm("amount", event.target.value)} placeholder="0,00" required />
+                </label>
+                <label className="planningField">
+                  <span>Tipo</span>
+                  <select value={form.direction} onChange={(event) => changeDirection(event.target.value)}>
+                    <option value="expense">Gasto</option>
+                    <option value="income">Recebimento</option>
+                  </select>
+                </label>
+                <label className="planningField">
+                  <span>Natureza</span>
+                  <select value={form.commitment_type} onChange={(event) => changeCommitmentType(event.target.value)}>
+                    <option value="recurring">Recorrente</option>
+                    <option value="subscription">Assinatura</option>
+                    <option value="installment">Parcela</option>
+                  </select>
+                </label>
+                <label className="planningField">
+                  <span>Frequência</span>
+                  <select value={form.frequency} onChange={(event) => updateForm("frequency", event.target.value)}>
+                    <option value="monthly">Mensal</option>
+                    <option value="yearly">Anual</option>
+                  </select>
+                </label>
+                {form.commitment_type !== "installment" && (
+                  <label className="planningField">
+                    <span>Regra da data</span>
+                    <select value={form.due_rule} onChange={(event) => updateForm("due_rule", event.target.value)}>
+                      <option value="fixed_day">Dia fixo do mês</option>
+                      <option value="business_day">Dia útil do mês</option>
+                    </select>
+                  </label>
+                )}
+                {form.commitment_type !== "installment" && form.due_rule === "business_day" && (
+                  <label className="planningField">
+                    <span>Número do dia útil</span>
+                    <input type="number" min="1" max="31" step="1" value={form.business_day_number} onChange={(event) => updateForm("business_day_number", event.target.value)} placeholder="Ex.: 5" required />
+                  </label>
+                )}
+                <label className="planningField">
+                  <span>Categoria <small>opcional</small></span>
+                  <select value={form.category_id} onChange={(event) => updateForm("category_id", event.target.value)}>
+                    <option value="">Sem categoria</option>
+                    {compatibleCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  </select>
+                </label>
+                <label className="planningField">
+                  <span>Começa em</span>
+                  <input type="date" min="1900-01-01" max="2100-12-31" value={form.starts_on} onChange={(event) => updateForm("starts_on", event.target.value)} required />
+                </label>
+                <label className="planningField">
+                  <span>{form.due_rule === "business_day" ? "Primeira ocorrência" : "Próxima ocorrência"}</span>
+                  <input type="date" min="1900-01-01" max="2100-12-31" value={automaticNextDue} onChange={(event) => updateForm("next_due_on", event.target.value)} required={form.due_rule !== "business_day"} disabled={form.due_rule === "business_day"} />
+                </label>
+                <label className="planningField">
+                  <span>Termina em <small>opcional</small></span>
+                  <input type="date" min="1900-01-01" max="2100-12-31" value={form.ends_on} onChange={(event) => updateForm("ends_on", event.target.value)} />
+                </label>
+                {form.commitment_type === "installment" && (
+                  <>
+                    <label className="planningField">
+                      <span>Parcela atual</span>
+                      <input type="number" min="1" step="1" value={form.current_installment} onChange={(event) => updateForm("current_installment", event.target.value)} required />
+                    </label>
+                    <label className="planningField">
+                      <span>Total de parcelas</span>
+                      <input type="number" min="1" step="1" value={form.total_installments} onChange={(event) => updateForm("total_installments", event.target.value)} required />
+                    </label>
+                  </>
+                )}
+              </div>
+              <p className="planningHint">Use “Dia útil” para regras como 5º dia útil. O Cifro conta segunda a sábado e não conta domingo; feriados ainda não entram nessa primeira versão.</p>
+              {notice && <p className="notice" role="status">{notice}</p>}
+              <div className="planningActions">
+                <span>{editingId ? "As alterações afetam as próximas projeções." : "O compromisso não cria um gasto real agora."}</span>
+                <button className="confirmButton" type="submit" disabled={busy}>{busy ? "Salvando..." : editingId ? "Salvar alterações" : "Adicionar ao planejamento"}</button>
+              </div>
+            </form>
+
+            <section className="commitmentListSection" aria-labelledby="commitment-list-title">
+              <div className="sectionHeader">
+                <div><p className="eyebrow">AGENDA</p><h2 id="commitment-list-title">Cobranças e recebimentos</h2></div>
+                <span className="seeAll">{loading ? "Atualizando" : `${commitments.length} ativos`}</span>
+              </div>
+              <div className="commitmentList">
+                {!loading && commitments.length === 0 ? (
+                  <p className="emptyState">Cadastre uma assinatura, parcela ou recebimento recorrente para começar a enxergar o próximo mês.</p>
+                ) : commitments.map((commitment) => (
+                  <div className="commitmentRow" key={commitment.id}>
+                    <div className="commitmentDate"><strong>{commitment.next_due_on.slice(8, 10)}</strong><span>{formatMonth(commitment.next_due_on.slice(0, 7)).slice(0, 3)}</span></div>
+                    <div className="commitmentInfo">
+                      <strong>{commitment.name}</strong>
+                      <span>{commitment.commitment_type === "subscription" ? "Assinatura" : commitment.commitment_type === "installment" ? `Parcela ${commitment.current_installment}/${commitment.total_installments}` : "Recorrente"} · {commitment.category_name || "Sem categoria"} · {commitment.due_rule === "business_day" ? `${commitment.business_day_number}º dia útil` : `dia ${commitment.next_due_on.slice(8, 10)}`} · {formatScheduleDate(commitment.next_due_on)}</span>
+                    </div>
+                    <b className={commitment.direction === "income" ? "income" : "expense"}>{commitment.direction === "income" ? "+" : "−"} {formatCurrency(commitment.amount)}</b>
+                    <div className="rowActions"><button type="button" onClick={() => startEditing(commitment)}>Editar</button><button type="button" onClick={() => removeCommitment(commitment)}>Excluir</button></div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <aside className="planningSummary" aria-labelledby="planning-summary-title">
+            <p className="eyebrow">COMO FUNCIONA</p>
+            <h2 id="planning-summary-title">O Cifro olha para frente.</h2>
+            <div className="planningRules">
+              <div><strong>Recorrentes</strong><span>Salário e contas mensais aparecem no próximo mês pelo dia cadastrado.</span></div>
+              <div><strong>Parcelas</strong><span>Entram somente na data da próxima parcela, com o progresso visível.</span></div>
+              <div><strong>Registros reais</strong><span>O planejamento não altera o saldo de hoje nem duplica uma movimentação.</span></div>
+            </div>
+            <a className="asideLink" href="/">Voltar para a visão geral <span>→</span></a>
+          </aside>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function CategoriesView({ session, accountName, onLogout }) {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -956,6 +1326,10 @@ export default function Home({ view = "dashboard" }) {
     return <CategoriesView session={session} accountName={accountName} onLogout={handleLogout} />;
   }
 
+  if (view === "planning") {
+    return <PlanningView session={session} accountName={accountName} onLogout={handleLogout} />;
+  }
+
   const current = dashboard?.current || { income: 0, expenses: 0, available: 0 };
   const next = dashboard?.next_month_summary || { income: 0, expenses: 0, available: 0 };
   const currentUsed = current.income ? Math.min(100, Math.round((current.expenses / current.income) * 100)) : 0;
@@ -1004,7 +1378,21 @@ export default function Home({ view = "dashboard" }) {
                 <div><span>Previsto</span><b>{formatCurrency(next.income)}</b></div>
                 <div><span>Comprometido</span><b>{formatCurrency(next.expenses)}</b></div>
               </div>
-              <Progress value={nextUsed} label={`${nextUsed}% comprometido`} detail={`${dashboard?.next_month_commitments?.length || 0} contas previstas`} accent />
+              <Progress value={nextUsed} label={`${nextUsed}% comprometido`} detail={`${dashboard?.next_month_commitments?.length || 0} itens previstos`} accent />
+              {dashboard?.next_month_commitments?.length ? (
+                <div className="commitmentPreview">
+                  <div className="commitmentPreviewHeader"><span>Próximas cobranças</span><a href="/planejamento">ver todas</a></div>
+                  {dashboard.next_month_commitments.slice(0, 3).map((commitment) => (
+                    <div className="commitmentPreviewRow" key={commitment.id}>
+                      <span>{formatDate(commitment.next_due_on)}</span>
+                      <strong>{commitment.name}</strong>
+                      <b className={commitment.direction === "income" ? "income" : "expense"}>{commitment.direction === "income" ? "+" : "−"} {formatCurrency(commitment.amount)}</b>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="commitmentEmpty">Nenhum compromisso previsto ainda. <a href="/planejamento">Planejar</a></p>
+              )}
             </article>
           </div>
         </section>
