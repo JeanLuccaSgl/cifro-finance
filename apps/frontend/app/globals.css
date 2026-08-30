@@ -110,6 +110,12 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .movement > b { font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; }
 .movement > b.expense { color: #c7ccd9; }
 .movement > b.income { color: var(--green); }
+.registerHistory .movement { grid-template-columns: 29px minmax(0, 1fr) auto auto; }
+.movementActions, .rowActions { display: flex; align-items: center; gap: 9px; }
+.movementActions button, .rowActions button { border: 0; padding: 0; color: #77839d; background: transparent; font-size: 9px; cursor: pointer; }
+.movementActions button:hover, .rowActions button:hover { color: var(--blue-bright); }
+.movementActions button:last-child, .rowActions button:last-child { color: #b4787e; }
+.movementActions button:last-child:hover, .rowActions button:last-child:hover { color: var(--red); }
 
 .authShell { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); min-height: 100vh; background: var(--navy-deep); }
 .authIntro { display: flex; flex-direction: column; justify-content: space-between; padding: 42px 8vw 13vh; border-right: 1px solid var(--line); background: #090f20; }
@@ -163,6 +169,26 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .confirmButton { min-height: 42px; border: 0; border-radius: 4px; padding: 0 16px; color: #fff; background: #6685ed; font-size: 10px; font-weight: 800; cursor: pointer; }
 .confirmButton:hover { background: #7895fb; }
 .registerHistory { max-width: 700px; margin-top: 72px; }
+.editPanel { max-width: 700px; margin-top: 26px; padding: 22px; border: 1px solid #2b3854; background: #0b1327; }
+.categoryContent { max-width: 820px; }
+.categoryIntro { max-width: 550px; padding: 70px 0 30px; }
+.categoryIntro h2 { max-width: 500px; margin-bottom: 13px; font-size: clamp(25px, 4vw, 36px); letter-spacing: -1.4px; line-height: 1.15; }
+.categoryIntro p:last-child { max-width: 430px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.categoryCreate { display: grid; grid-template-columns: minmax(0, 1fr) 160px auto; align-items: end; gap: 12px; max-width: 700px; padding: 18px 0 22px; border-bottom: 1px solid var(--line); }
+.categoryCreate div { display: grid; gap: 7px; }
+.categoryCreate label { color: #9ca7bd; font-size: 10px; font-weight: 700; }
+.categoryCreate input, .categoryCreate select, .categoryRow input, .categoryRow select { min-height: 42px; padding: 0 11px; border: 1px solid #2b3854; border-radius: 4px; outline: 0; color: var(--ink); background: #0d1529; font-size: 11px; }
+.categoryCreate input:focus, .categoryCreate select:focus, .categoryRow input:focus, .categoryRow select:focus { border-color: var(--blue-bright); box-shadow: 0 0 0 3px rgba(118, 149, 255, .11); }
+.categoryCreate .confirmButton { min-height: 42px; white-space: nowrap; }
+.categoryListSection { max-width: 700px; margin-top: 58px; }
+.categoryList { display: grid; }
+.categoryRow { display: grid; grid-template-columns: minmax(0, 1fr) 170px auto; align-items: center; gap: 14px; min-height: 61px; border-bottom: 1px solid var(--line-soft); }
+.categoryName { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.categoryName strong { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.categoryDot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); }
+.categoryKind { color: #737f98; font-family: 'DM Mono', monospace; font-size: 9px; }
+.categoryEditName { min-width: 0; }
+.categoryRow > select { width: 100%; min-height: 36px; font-size: 10px; }
 
 @media (max-width: 760px) {
   .authShell { display: block; }
@@ -210,4 +236,13 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
   .categoryCreator input { grid-column: 1 / -1; }
   .confirmationActions { align-items: stretch; flex-direction: column; }
   .confirmButton { width: 100%; }
+  .registerHistory .movement { grid-template-columns: 29px minmax(0, 1fr) auto; gap: 9px; padding: 10px 0; }
+  .registerHistory .movementActions { grid-column: 2 / -1; }
+  .categoryCreate { display: block; }
+  .categoryCreate div { margin-bottom: 12px; }
+  .categoryCreate .confirmButton { width: 100%; }
+  .categoryRow { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 11px 0; }
+  .categoryKind { grid-column: 1; grid-row: 2; }
+  .categoryRow .rowActions { grid-column: 2; grid-row: 1 / span 2; }
+  .categoryRow > select { grid-column: 1; }
 }

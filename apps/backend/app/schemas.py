@@ -27,6 +27,10 @@ class CategoryCreate(BaseModel):
     kind: CategoryKind
 
 
+class CategoryUpdate(CategoryCreate):
+    pass
+
+
 class CategoryRead(CategoryCreate):
     model_config = ConfigDict(from_attributes=True)
 
@@ -43,6 +47,17 @@ class TransactionCreate(BaseModel):
     category_id: UUID | None = None
     commitment_id: UUID | None = None
     status: TransactionStatus = TransactionStatus.COMPLETED
+    notes: str | None = None
+
+
+class TransactionUpdate(BaseModel):
+    description: str | None = Field(default=None, min_length=1, max_length=160)
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    direction: Direction | None = None
+    occurred_on: date | None = None
+    category_id: UUID | None = None
+    commitment_id: UUID | None = None
+    status: TransactionStatus | None = None
     notes: str | None = None
 
 

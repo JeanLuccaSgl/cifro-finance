@@ -77,6 +77,7 @@ async function apiRequest(path, session, options = {}) {
     throw new Error(body.detail || "Não foi possível falar com a API.");
   }
 
+  if (response.status === 204) return null;
   return response.json();
 }
 
@@ -157,7 +158,7 @@ function Sidebar({ active, accountName, onLogout }) {
       <nav className="mainNav" aria-label="Navegação principal">
         <a className={active === "dashboard" ? "navItem active" : "navItem"} href="/"><span>01</span> Visão geral</a>
         <a className={active === "register" ? "navItem active" : "navItem"} href="/registrar"><span>02</span> Registrar</a>
-        <a className="navItem" href="/#planning"><span>03</span> Planejamento</a>
+        <a className={active === "categories" ? "navItem active" : "navItem"} href="/categorias"><span>03</span> Categorias</a>
       </nav>
 
       <div className="account">
@@ -187,6 +188,13 @@ function RegisterView({ session, accountName, onLogout }) {
   const [newCategoryKind, setNewCategoryKind] = useState("expense");
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [editingMovement, setEditingMovement] = useState(null);
+  const [editDescription, setEditDescription] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+  const [editDirection, setEditDirection] = useState("expense");
+  const [editDate, setEditDate] = useState("");
+  const [editCategoryId, setEditCategoryId] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
 
   async function loadMovements() {
     setLoading(true);
@@ -297,6 +305,74 @@ function RegisterView({ session, accountName, onLogout }) {
       setNotice(error.message);
     } finally {
       setConfirmBusy(false);
+    }
+  }
+
+  function startEditing(movement) {
+    setEditingMovement(movement);
+    setEditDescription(movement.description);
+    setEditAmount(String(movement.amount));
+    setEditDirection(movement.direction);
+    setEditDate(movement.occurred_on);
+    setEditCategoryId(movement.category_id || "");
+    setNotice("");
+  }
+
+  function cancelEditing() {
+    setEditingMovement(null);
+    setNotice("");
+  }
+
+  async function saveEditedMovement(event) {
+    event.preventDefault();
+    const description = editDescription.trim();
+    const amount = Number(String(editAmount).replace(",", "."));
+
+    if (!description || !Number.isFinite(amount) || amount <= 0 || !editDate) {
+      setNotice("Confira a descrição, o valor e a data.");
+      return;
+    }
+
+    setEditBusy(true);
+    try {
+      await apiRequest(`/api/v1/transactions/${editingMovement.id}`, session, {
+        method: "PATCH",
+        body: JSON.stringify({
+          description,
+          amount,
+          direction: editDirection,
+          occurred_on: editDate,
+          category_id: editCategoryId || null,
+        }),
+      });
+      setEditingMovement(null);
+      setNotice("Movimentação atualizada");
+      await loadMovements();
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  function changeEditDirection(direction) {
+    setEditDirection(direction);
+    const selectedCategory = categories.find((category) => category.id === editCategoryId);
+    if (selectedCategory && selectedCategory.kind !== "both" && selectedCategory.kind !== direction) {
+      setEditCategoryId("");
+    }
+  }
+
+  async function removeMovement(movement) {
+    if (!window.confirm(`Excluir “${movement.description}”?`)) return;
+
+    try {
+      await apiRequest(`/api/v1/transactions/${movement.id}`, session, { method: "DELETE" });
+      if (editingMovement?.id === movement.id) setEditingMovement(null);
+      setNotice("Movimentação excluída");
+      await loadMovements();
+    } catch (error) {
+      setNotice(error.message);
     }
   }
 
@@ -423,6 +499,52 @@ function RegisterView({ session, accountName, onLogout }) {
             </div>
           </form>
         )}
+
+        {editingMovement && (
+          <form className="editPanel" onSubmit={saveEditedMovement}>
+            <div className="confirmationHeader">
+              <div>
+                <p className="eyebrow">EDITAR MOVIMENTAÇÃO</p>
+                <h3>Corrija o que for necessário.</h3>
+              </div>
+              <button className="cancelButton" type="button" onClick={cancelEditing}>Cancelar</button>
+            </div>
+            <div className="confirmationGrid">
+              <label className="confirmationField">
+                <span>Tipo</span>
+                <select value={editDirection} onChange={(event) => changeEditDirection(event.target.value)}>
+                  <option value="expense">Gasto</option>
+                  <option value="income">Recebimento</option>
+                </select>
+              </label>
+              <label className="confirmationField">
+                <span>Valor</span>
+                <input type="number" min="0.01" step="0.01" value={editAmount} onChange={(event) => setEditAmount(event.target.value)} />
+              </label>
+              <label className="confirmationField confirmationWide">
+                <span>Descrição</span>
+                <input value={editDescription} onChange={(event) => setEditDescription(event.target.value)} maxLength={160} />
+              </label>
+              <label className="confirmationField">
+                <span>Data</span>
+                <input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} />
+              </label>
+              <label className="confirmationField">
+                <span>Categoria <small>opcional</small></span>
+                <select value={editCategoryId} onChange={(event) => setEditCategoryId(event.target.value)}>
+                  <option value="">Sem categoria</option>
+                  {categories
+                    .filter((category) => category.kind === "both" || category.kind === editDirection)
+                    .map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="confirmationActions">
+              <span>Alteração manual</span>
+              <button className="confirmButton" type="submit" disabled={editBusy}>{editBusy ? "Salvando..." : "Salvar alterações"}</button>
+            </div>
+          </form>
+        )}
         {notice && <p className="notice" role="status">{notice}</p>}
 
         <section className="registerHistory" aria-labelledby="history-title">
@@ -440,9 +562,185 @@ function RegisterView({ session, accountName, onLogout }) {
                   <span className={`movementMark ${tone}`}>{movement.description.charAt(0).toUpperCase()}</span>
                   <div className="movementInfo"><strong>{movement.description}</strong><span>{movement.category_name || "Sem categoria"} · {formatDate(movement.occurred_on)}</span></div>
                   <b className={tone}>{tone === "income" ? "+" : "−"} {formatCurrency(movement.amount)}</b>
+                  <div className="movementActions">
+                    <button type="button" onClick={() => startEditing(movement)}>Editar</button>
+                    <button type="button" onClick={() => removeMovement(movement)}>Excluir</button>
+                  </div>
                 </div>
               );
             })}
+          </div>
+        </section>
+      </section>
+    </main>
+  );
+}
+
+function categoryKindLabel(kind) {
+  if (kind === "income") return "Recebimentos";
+  if (kind === "expense") return "Gastos";
+  return "Gastos e recebimentos";
+}
+
+function CategoriesView({ session, accountName, onLogout }) {
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState("");
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState("expense");
+  const [busy, setBusy] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState("");
+  const [editingKind, setEditingKind] = useState("expense");
+
+  async function loadCategories() {
+    setLoading(true);
+    try {
+      const data = await apiRequest("/api/v1/categories", session);
+      setCategories(data);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadCategories();
+  }, [session]);
+
+  async function createCategory(event) {
+    event.preventDefault();
+    const cleanName = name.trim();
+    if (!cleanName) return;
+
+    setBusy(true);
+    try {
+      const category = await apiRequest("/api/v1/categories", session, {
+        method: "POST",
+        body: JSON.stringify({ name: cleanName, kind }),
+      });
+      setCategories((current) => [...current, category].sort((a, b) => a.name.localeCompare(b.name)));
+      setName("");
+      setNotice(`Categoria “${category.name}” criada`);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startEditing(category) {
+    setEditingId(category.id);
+    setEditingName(category.name);
+    setEditingKind(category.kind);
+    setNotice("");
+  }
+
+  async function saveCategory(categoryId) {
+    const cleanName = editingName.trim();
+    if (!cleanName) return;
+
+    setBusy(true);
+    try {
+      const category = await apiRequest(`/api/v1/categories/${categoryId}`, session, {
+        method: "PATCH",
+        body: JSON.stringify({ name: cleanName, kind: editingKind }),
+      });
+      setCategories((current) => current.map((item) => item.id === category.id ? category : item).sort((a, b) => a.name.localeCompare(b.name)));
+      setEditingId(null);
+      setNotice(`Categoria “${category.name}” atualizada`);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeCategory(category) {
+    if (!window.confirm(`Excluir a categoria “${category.name}”? Os registros continuam salvos, mas ficarão sem categoria.`)) return;
+
+    try {
+      await apiRequest(`/api/v1/categories/${category.id}`, session, { method: "DELETE" });
+      setCategories((current) => current.filter((item) => item.id !== category.id));
+      if (editingId === category.id) setEditingId(null);
+      setNotice(`Categoria “${category.name}” excluída`);
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }
+
+  return (
+    <main className="shell">
+      <Sidebar active="categories" accountName={accountName} onLogout={onLogout} />
+      <section className="content categoryContent">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">ORGANIZAÇÃO</p>
+            <h1>Suas categorias.</h1>
+          </div>
+          <a className="backLink" href="/registrar">← Registrar</a>
+        </header>
+
+        <section className="categoryIntro">
+          <p className="eyebrow">CATEGORIAS</p>
+          <h2>Nomeie o que se repete na sua vida financeira.</h2>
+          <p>Use categorias próprias para encontrar sentido nos registros, sem criar uma taxonomia enorme.</p>
+        </section>
+
+        <form className="categoryCreate" onSubmit={createCategory}>
+          <div>
+            <label htmlFor="new-category-name">Nova categoria</label>
+            <input id="new-category-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Alimentação" maxLength={80} />
+          </div>
+          <div>
+            <label htmlFor="new-category-kind">Usar para</label>
+            <select id="new-category-kind" value={kind} onChange={(event) => setKind(event.target.value)}>
+              <option value="expense">Gastos</option>
+              <option value="income">Recebimentos</option>
+              <option value="both">Os dois</option>
+            </select>
+          </div>
+          <button className="confirmButton" type="submit" disabled={busy || !name.trim()}>{busy ? "Salvando..." : "Adicionar categoria"}</button>
+        </form>
+
+        {notice && <p className="notice" role="status">{notice}</p>}
+
+        <section className="categoryListSection" aria-labelledby="category-list-title">
+          <div className="sectionHeader">
+            <div><p className="eyebrow">LISTA</p><h2 id="category-list-title">Categorias criadas</h2></div>
+            <span className="seeAll">{loading ? "Atualizando" : `${categories.length} categorias`}</span>
+          </div>
+          <div className="categoryList">
+            {!loading && categories.length === 0 ? (
+              <p className="emptyState">Crie a primeira categoria para deixar seus registros mais claros.</p>
+            ) : categories.map((category) => (
+              <div className="categoryRow" key={category.id}>
+                {editingId === category.id ? (
+                  <>
+                    <input className="categoryEditName" value={editingName} onChange={(event) => setEditingName(event.target.value)} maxLength={80} aria-label={`Nome da categoria ${category.name}`} />
+                    <select value={editingKind} onChange={(event) => setEditingKind(event.target.value)} aria-label={`Tipo da categoria ${category.name}`}>
+                      <option value="expense">Gastos</option>
+                      <option value="income">Recebimentos</option>
+                      <option value="both">Os dois</option>
+                    </select>
+                    <div className="rowActions">
+                      <button type="button" onClick={() => saveCategory(category.id)} disabled={busy}>Salvar</button>
+                      <button type="button" onClick={() => setEditingId(null)}>Cancelar</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="categoryName"><span className="categoryDot" /> <strong>{category.name}</strong></div>
+                    <span className="categoryKind">{categoryKindLabel(category.kind)}</span>
+                    <div className="rowActions">
+                      <button type="button" onClick={() => startEditing(category)}>Editar</button>
+                      <button type="button" onClick={() => removeCategory(category)}>Excluir</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
           </div>
         </section>
       </section>
@@ -549,6 +847,10 @@ export default function Home({ view = "dashboard" }) {
 
   if (view === "register") {
     return <RegisterView session={session} accountName={accountName} onLogout={handleLogout} />;
+  }
+
+  if (view === "categories") {
+    return <CategoriesView session={session} accountName={accountName} onLogout={handleLogout} />;
   }
 
   const current = dashboard?.current || { income: 0, expenses: 0, available: 0 };

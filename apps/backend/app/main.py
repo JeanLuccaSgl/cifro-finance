@@ -14,12 +14,14 @@ from .db import get_connection
 from .schemas import (
     CategoryCreate,
     CategoryRead,
+    CategoryUpdate,
     CommitmentPreview,
     DashboardPeriod,
     DashboardRead,
     Direction,
     TransactionCreate,
     TransactionRead,
+    TransactionUpdate,
 )
 from .security import current_user_id
 
@@ -34,7 +36,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -94,6 +96,47 @@ def create_category(payload: CategoryCreate, user_id: UUID = Depends(current_use
             ).fetchone()
     except UniqueViolation as error:
         raise HTTPException(status_code=409, detail="Category already exists") from error
+
+
+@router.patch("/categories/{category_id}", response_model=CategoryRead)
+def update_category(
+    category_id: UUID,
+    payload: CategoryUpdate,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    try:
+        with get_connection() as connection:
+            row = connection.execute(
+                """
+                update public.categories
+                set name = %s, kind = %s
+                where id = %s and user_id = %s and is_active = true
+                returning id, name, kind, is_active, created_at
+                """,
+                (payload.name.strip(), payload.kind.value, category_id, user_id),
+            ).fetchone()
+    except UniqueViolation as error:
+        raise HTTPException(status_code=409, detail="Category already exists") from error
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Category not found")
+    return row
+
+
+@router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_category(category_id: UUID, user_id: UUID = Depends(current_user_id)) -> None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            delete from public.categories
+            where id = %s and user_id = %s
+            returning id
+            """,
+            (category_id, user_id),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Category not found")
 
 
 @router.get("/transactions", response_model=list[TransactionRead])
@@ -159,6 +202,103 @@ def create_transaction(payload: TransactionCreate, user_id: UUID = Depends(curre
             category_name = category["name"] if category else None
     row["category_name"] = category_name
     return row
+
+
+@router.patch("/transactions/{transaction_id}", response_model=TransactionRead)
+def update_transaction(
+    transaction_id: UUID,
+    payload: TransactionUpdate,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    values = payload.model_dump(exclude_unset=True)
+    if not values:
+        raise HTTPException(status_code=400, detail="No transaction changes provided")
+
+    field_map = {
+        "description": "description",
+        "amount": "amount",
+        "direction": "direction",
+        "occurred_on": "occurred_on",
+        "category_id": "category_id",
+        "commitment_id": "commitment_id",
+        "status": "status",
+        "notes": "notes",
+    }
+    assignments = []
+    parameters = []
+    for field, column in field_map.items():
+        if field not in values:
+            continue
+        value = values[field]
+        if field == "description":
+            if value is None:
+                raise HTTPException(status_code=400, detail="Description cannot be empty")
+            value = value.strip()
+        elif field in {"direction", "status"}:
+            if value is None:
+                raise HTTPException(status_code=400, detail=f"{field} cannot be empty")
+            value = value.value
+        assignments.append(f"{column} = %s")
+        parameters.append(value)
+
+    with get_connection() as connection:
+        if payload.category_id:
+            category = connection.execute(
+                """
+                select id
+                from public.categories
+                where id = %s and user_id = %s and is_active = true
+                """,
+                (payload.category_id, user_id),
+            ).fetchone()
+            if not category:
+                raise HTTPException(status_code=400, detail="Category not found")
+
+        parameters.extend([transaction_id, user_id])
+        row = connection.execute(
+            f"""
+            update public.transactions
+            set {', '.join(assignments)}
+            where id = %s and user_id = %s
+            returning id, description, amount, direction, occurred_on,
+              category_id, commitment_id, status, notes, created_at, updated_at
+            """,
+            parameters,
+        ).fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+
+        category_name = None
+        if row["category_id"]:
+            category = connection.execute(
+                """
+                select name
+                from public.categories
+                where id = %s and user_id = %s
+                """,
+                (row["category_id"], user_id),
+            ).fetchone()
+            category_name = category["name"] if category else None
+
+    row["category_name"] = category_name
+    return row
+
+
+@router.delete("/transactions/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_transaction(transaction_id: UUID, user_id: UUID = Depends(current_user_id)) -> None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            delete from public.transactions
+            where id = %s and user_id = %s
+            returning id
+            """,
+            (transaction_id, user_id),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Transaction not found")
 
 
 @router.get("/dashboard", response_model=DashboardRead)
