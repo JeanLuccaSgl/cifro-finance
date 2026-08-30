@@ -864,6 +864,8 @@ function SettingsView({ session, accountName, onLogout }) {
 function DataView({ session, accountName, onLogout }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [importFile, setImportFile] = useState(null);
+  const [preview, setPreview] = useState(null);
 
   async function exportTransactions() {
     setBusy(true);
@@ -894,6 +896,44 @@ function DataView({ session, accountName, onLogout }) {
     }
   }
 
+  async function analyzeImport() {
+    if (!importFile) return;
+    setBusy(true);
+    setNotice("");
+    setPreview(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", importFile);
+      const response = await fetch(`${API_URL}/api/v1/transactions/import/preview`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: formData,
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || "Não foi possível analisar a planilha.");
+      }
+      setPreview(await response.json());
+      setNotice("Planilha analisada. Nada foi salvo.");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const importFieldLabels = {
+    date: "Data",
+    description: "Descrição",
+    amount: "Valor",
+    direction: "Tipo",
+    income: "Entrada",
+    expense: "Saída",
+    category: "Categoria",
+    status: "Status",
+    notes: "Observações",
+  };
+
   return (
     <main className="shell">
       <Sidebar active="data" accountName={accountName} onLogout={onLogout} />
@@ -917,7 +957,80 @@ function DataView({ session, accountName, onLogout }) {
               </button>
             </section>
 
+            <section className="dataImportSection" aria-labelledby="import-title">
+              <div className="dataSectionHeading">
+                <div><p className="eyebrow">IMPORTAÇÃO SEGURA</p><h2 id="import-title">Veja antes de trazer para o Cifro.</h2></div>
+              </div>
+              <p className="dataImportDescription">Escolha um CSV ou XLSX. Nesta etapa, o Cifro apenas analisa o arquivo e mostra o que entendeu.</p>
+              <div className="dataImportControls">
+                <label className="filePicker">
+                  <span>{importFile ? importFile.name : "Escolher planilha"}</span>
+                  <input
+                    type="file"
+                    accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={(event) => {
+                      setImportFile(event.target.files?.[0] || null);
+                      setPreview(null);
+                      setNotice("");
+                    }}
+                  />
+                </label>
+                <button className="secondaryButton" type="button" onClick={analyzeImport} disabled={busy || !importFile}>
+                  {busy ? "Analisando..." : "Analisar planilha"}
+                </button>
+              </div>
+              <p className="dataImportSafety">Limite atual: 10 MB. A análise não cria, edita ou exclui movimentações.</p>
+            </section>
+
             {notice && <p className="notice" role="status">{notice}</p>}
+
+            {preview && (
+              <section className="importPreview" aria-labelledby="preview-title">
+                <div className="dataSectionHeading">
+                  <div><p className="eyebrow">PRÉVIA</p><h2 id="preview-title">{preview.filename}</h2></div>
+                  <span className="previewStatus">somente leitura</span>
+                </div>
+                <div className="importTotals">
+                  <div><strong>{preview.total_sheets}</strong><span>abas</span></div>
+                  <div><strong>{preview.total_rows}</strong><span>linhas</span></div>
+                  <div><strong className="validText">{preview.valid_rows}</strong><span>válidas</span></div>
+                  <div><strong className={preview.invalid_rows ? "invalidText" : "validText"}>{preview.invalid_rows}</strong><span>com atenção</span></div>
+                </div>
+                <div className="importSheets">
+                  {preview.sheets.map((sheet) => (
+                    <article className="importSheet" key={sheet.name}>
+                      <div className="importSheetHeader">
+                        <div><strong>{sheet.name}</strong><span>{sheet.total_rows} linhas · {sheet.valid_rows} válidas</span></div>
+                        <b className={sheet.invalid_rows ? "invalidText" : "validText"}>{sheet.invalid_rows ? `${sheet.invalid_rows} atenção` : "Pronta"}</b>
+                      </div>
+                      {sheet.errors.length > 0 ? (
+                        <p className="importError">{sheet.errors.join(" · ")}</p>
+                      ) : (
+                        <>
+                          <div className="importMapping">
+                            {Object.entries(sheet.mapping).filter(([, column]) => column).map(([field, column]) => (
+                              <span key={field}><b>{importFieldLabels[field]}</b>{column}</span>
+                            ))}
+                          </div>
+                          {sheet.rows.length > 0 && (
+                            <div className="importRowList">
+                              {sheet.rows.slice(0, 8).map((row) => (
+                                <div className={row.valid ? "importRow" : "importRow invalidRow"} key={`${sheet.name}-${row.source_row}`}>
+                                  <span>{row.source_row}</span>
+                                  <strong>{row.description || "Sem descrição"}</strong>
+                                  <b>{row.amount ? `R$ ${row.amount.replace(".", ",")}` : "—"}</b>
+                                  <em>{row.valid ? (row.direction === "income" ? "Recebimento" : "Gasto") : row.errors.join(" · ")}</em>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <section className="dataSection" aria-labelledby="export-format-title">
               <div className="dataSectionHeading">

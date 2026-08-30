@@ -1,15 +1,18 @@
 import csv
 import io
 from calendar import monthrange
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+import re
+import unicodedata
 from typing import Annotated
 from uuid import UUID
 
 import psycopg
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg.errors import UniqueViolation
+from openpyxl import load_workbook
 
 from .config import settings
 from .db import get_connection
@@ -93,6 +96,229 @@ def first_business_occurrence(start: date, ordinal: int) -> date | None:
 
 def as_money(value: Decimal | None) -> Decimal:
     return value or Decimal("0.00")
+
+
+IMPORT_MAX_BYTES = 10 * 1024 * 1024
+IMPORT_PREVIEW_LIMIT = 100
+IMPORT_FIELDS = ("date", "description", "amount", "direction", "income", "expense", "category", "status", "notes")
+IMPORT_ALIASES = {
+    "date": ("data", "date", "dia", "quando", "ocorrido em", "ocorrencia"),
+    "description": ("descricao", "historico", "detalhes", "lancamento", "movimento", "evento", "nome"),
+    "amount": ("valor", "amount", "total", "quantia", "preco", "preco total"),
+    "direction": ("tipo", "type", "natureza", "operacao", "movimentacao", "movimento"),
+    "income": ("entrada", "receita", "recebimento", "credito", "creditos"),
+    "expense": ("saida", "despesa", "gasto", "pagamento", "debito", "debitos"),
+    "category": ("categoria", "classificacao", "grupo", "category"),
+    "status": ("status", "situacao", "estado"),
+    "notes": ("observacoes", "observacao", "obs", "notas", "notes"),
+}
+
+
+def normalize_import_text(value: object) -> str:
+    text = "" if value is None else str(value).strip().lower()
+    return "".join(
+        character
+        for character in unicodedata.normalize("NFD", text)
+        if unicodedata.category(character) != "Mn"
+    )
+
+
+def import_cell_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return str(value).strip()
+
+
+def find_import_header(rows: list[list[object]]) -> tuple[int | None, list[str], int]:
+    best: tuple[int | None, list[str], int] = (None, [], 0)
+    known_aliases = {alias for aliases in IMPORT_ALIASES.values() for alias in aliases}
+    for index, row in enumerate(rows[:20]):
+        headers = [import_cell_text(cell) for cell in row]
+        normalized_headers = [normalize_import_text(header) for header in headers]
+        score = sum(
+            any(alias == header or alias in header for alias in known_aliases)
+            for header in normalized_headers
+            if header
+        )
+        if score > best[2]:
+            best = (index, headers, score)
+    if best[2] < 2:
+        return None, [], best[2]
+    return best
+
+
+def detect_import_mapping(headers: list[str]) -> dict[str, str | None]:
+    normalized_headers = [normalize_import_text(header) for header in headers]
+    mapping: dict[str, str | None] = {}
+    used: set[int] = set()
+    for field in IMPORT_FIELDS:
+        aliases = sorted(IMPORT_ALIASES[field], key=len, reverse=True)
+        found_index = None
+        for index, header in enumerate(normalized_headers):
+            if index in used or not header:
+                continue
+            if any(alias == header or alias in header for alias in aliases):
+                found_index = index
+                break
+        mapping[field] = headers[found_index] if found_index is not None else None
+        if found_index is not None:
+            used.add(found_index)
+    return mapping
+
+
+def import_mapping_indexes(headers: list[str], mapping: dict[str, str | None]) -> dict[str, int | None]:
+    return {
+        field: headers.index(column) if column in headers else None
+        for field, column in mapping.items()
+    }
+
+
+def parse_import_date(value: object) -> str | None:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = import_cell_text(value)
+    if not text:
+        return None
+    for pattern in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, pattern).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def parse_import_amount(value: object) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            return Decimal(str(value)).quantize(Decimal("0.01"))
+        except (ArithmeticError, ValueError):
+            return None
+
+    text = import_cell_text(value).replace("R$", "").replace("r$", "").replace(" ", "")
+    if not text:
+        return None
+    negative = text.startswith("-") or (text.startswith("(") and text.endswith(")"))
+    text = text.strip("()")
+    text = re.sub(r"[^0-9,.]", "", text)
+    if not text:
+        return None
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(",", ".")
+    elif text.count(".") > 1:
+        text = text.replace(".", "")
+    try:
+        amount = Decimal(text).quantize(Decimal("0.01"))
+    except (ArithmeticError, ValueError):
+        return None
+    return -amount if negative else amount
+
+
+def parse_import_direction(value: object) -> str | None:
+    normalized = normalize_import_text(value)
+    if normalized in {"income", "recebimento", "recebimentos", "entrada", "receita", "credito", "creditos", "+"}:
+        return "income"
+    if normalized in {"expense", "gasto", "gastos", "saida", "despesa", "pagamento", "debito", "debitos", "-"}:
+        return "expense"
+    return None
+
+
+def parse_import_status(value: object) -> str:
+    normalized = normalize_import_text(value)
+    if normalized in {"planned", "pendente", "pendentes", "previsto", "prevista"}:
+        return "planned"
+    return "completed"
+
+
+def normalize_import_row(
+    values: list[object],
+    indexes: dict[str, int | None],
+    sheet_name: str,
+    row_number: int,
+) -> dict:
+    def value_for(field: str) -> object:
+        index = indexes.get(field)
+        return values[index] if index is not None and index < len(values) else None
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    raw_description = import_cell_text(value_for("description"))
+    parsed_date = parse_import_date(value_for("date"))
+    direction = parse_import_direction(value_for("direction"))
+    income = parse_import_amount(value_for("income"))
+    expense = parse_import_amount(value_for("expense"))
+    amount = parse_import_amount(value_for("amount"))
+
+    if not raw_description:
+        errors.append("Descrição ausente")
+    if not parsed_date:
+        errors.append("Data ausente ou inválida")
+
+    if income is not None and income != 0:
+        amount = abs(income)
+        direction = "income"
+    elif expense is not None and expense != 0:
+        amount = abs(expense)
+        direction = "expense"
+    elif amount is not None and amount < 0:
+        amount = abs(amount)
+        direction = direction or "expense"
+
+    if amount is None or amount <= 0:
+        errors.append("Valor ausente ou inválido")
+    if direction is None:
+        errors.append("Tipo não identificado")
+    if indexes.get("status") is None:
+        warnings.append("Status não encontrado; será tratado como concluído")
+
+    return {
+        "sheet_name": sheet_name,
+        "source_row": row_number,
+        "date": parsed_date,
+        "description": raw_description,
+        "amount": f"{amount:.2f}" if amount is not None else None,
+        "direction": direction,
+        "category": import_cell_text(value_for("category")) or None,
+        "status": parse_import_status(value_for("status")),
+        "notes": import_cell_text(value_for("notes")) or None,
+        "errors": errors,
+        "warnings": warnings,
+        "valid": not errors,
+    }
+
+
+def read_import_sheets(filename: str, content: bytes) -> list[tuple[str, list[list[object]]]]:
+    if filename.lower().endswith(".csv"):
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = content.decode("cp1252")
+        sample = text[:4096]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=";,\t,")
+        except csv.Error:
+            dialect = csv.excel
+            dialect.delimiter = ";"
+        rows = list(csv.reader(io.StringIO(text), dialect))
+        return [(filename.rsplit(".", 1)[0], rows)]
+
+    if filename.lower().endswith(".xlsx"):
+        workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        sheets = []
+        for worksheet in workbook.worksheets:
+            rows = [list(row) for row in worksheet.iter_rows(values_only=True)]
+            sheets.append((worksheet.title, rows))
+        workbook.close()
+        return sheets
+
+    raise HTTPException(status_code=400, detail="Use um arquivo CSV ou XLSX")
 
 
 def projected_commitment_date(row: dict, year: int, month: int) -> date | None:
@@ -790,6 +1016,106 @@ def export_transactions(user_id: UUID = Depends(current_user_id)) -> Response:
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="cifro-movimentacoes.csv"'},
     )
+
+
+@router.post("/transactions/import/preview")
+async def preview_transaction_import(
+    file: UploadFile = File(...),
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    """Read an import file without persisting any row."""
+    del user_id  # Authentication is required; this first stage is read-only.
+    filename = file.filename or "planilha"
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="A planilha está vazia")
+    if len(content) > IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="A planilha deve ter no máximo 10 MB")
+
+    sheets = read_import_sheets(filename, content)
+    sheet_previews = []
+    total_rows = 0
+    valid_rows = 0
+    invalid_rows = 0
+
+    for sheet_name, rows in sheets:
+        header_index, headers, header_score = find_import_header(rows)
+        if header_index is None:
+            sheet_previews.append(
+                {
+                    "name": sheet_name,
+                    "header_row": None,
+                    "headers": [],
+                    "mapping": {field: None for field in IMPORT_FIELDS},
+                    "confidence": 0,
+                    "total_rows": 0,
+                    "valid_rows": 0,
+                    "invalid_rows": 0,
+                    "rows": [],
+                    "errors": ["Não encontrei uma linha de cabeçalho reconhecível"],
+                }
+            )
+            continue
+
+        mapping = detect_import_mapping(headers)
+        indexes = import_mapping_indexes(headers, mapping)
+        missing_fields = []
+        if indexes["date"] is None:
+            missing_fields.append("data")
+        if indexes["description"] is None:
+            missing_fields.append("descrição")
+        if indexes["amount"] is None and indexes["income"] is None and indexes["expense"] is None:
+            missing_fields.append("valor ou entrada/saída")
+        if indexes["direction"] is None and indexes["income"] is None and indexes["expense"] is None:
+            missing_fields.append("tipo")
+
+        preview_rows = []
+        sheet_total = 0
+        sheet_valid = 0
+        sheet_invalid = 0
+        for row_index, values in enumerate(rows[header_index + 1 :], start=header_index + 2):
+            if not any(import_cell_text(value) for value in values):
+                continue
+            sheet_total += 1
+            normalized_row = normalize_import_row(values, indexes, sheet_name, row_index)
+            if missing_fields:
+                normalized_row["errors"] = [f"Coluna não identificada: {field}" for field in missing_fields]
+                normalized_row["valid"] = False
+            if normalized_row["valid"]:
+                sheet_valid += 1
+            else:
+                sheet_invalid += 1
+            if len(preview_rows) < IMPORT_PREVIEW_LIMIT:
+                preview_rows.append(normalized_row)
+
+        total_rows += sheet_total
+        valid_rows += sheet_valid
+        invalid_rows += sheet_invalid
+        sheet_previews.append(
+            {
+                "name": sheet_name,
+                "header_row": header_index + 1,
+                "headers": headers,
+                "mapping": mapping,
+                "confidence": min(100, header_score * 20),
+                "total_rows": sheet_total,
+                "valid_rows": sheet_valid,
+                "invalid_rows": sheet_invalid,
+                "rows": preview_rows,
+                "errors": [],
+            }
+        )
+
+    return {
+        "filename": filename,
+        "format": "xlsx" if filename.lower().endswith(".xlsx") else "csv",
+        "total_sheets": len(sheet_previews),
+        "total_rows": total_rows,
+        "valid_rows": valid_rows,
+        "invalid_rows": invalid_rows,
+        "preview_limit": IMPORT_PREVIEW_LIMIT,
+        "sheets": sheet_previews,
+    }
 
 
 @router.post("/transactions", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
