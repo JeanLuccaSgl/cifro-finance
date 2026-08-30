@@ -241,6 +241,7 @@ function RegisterView({ session, accountName, onLogout }) {
   const [newCategoryKind, setNewCategoryKind] = useState("expense");
   const [categoryBusy, setCategoryBusy] = useState(false);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [confirmingId, setConfirmingId] = useState(null);
   const [editingMovement, setEditingMovement] = useState(null);
   const [editDescription, setEditDescription] = useState("");
   const [editAmount, setEditAmount] = useState("");
@@ -448,6 +449,24 @@ function RegisterView({ session, accountName, onLogout }) {
     }
   }
 
+  async function confirmPlannedMovement(movement) {
+    if (!window.confirm(`Confirmar “${movement.description}” como movimentação concluída?`)) return;
+
+    setConfirmingId(movement.id);
+    try {
+      await apiRequest(`/api/v1/transactions/${movement.id}`, session, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "completed" }),
+      });
+      setNotice("Movimentação confirmada");
+      await loadMovements();
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setConfirmingId(null);
+    }
+  }
+
   const compatibleCategories = categories.filter(
     (category) => category.kind === "both" || category.kind === pendingDirection,
   );
@@ -650,9 +669,10 @@ function RegisterView({ session, accountName, onLogout }) {
               return (
                 <div className="movement" key={movement.id}>
                   <span className={`movementMark ${tone}`}>{movement.description.charAt(0).toUpperCase()}</span>
-                  <div className="movementInfo"><strong>{movement.description}</strong><span>{movement.category_name || "Sem categoria"} · {formatDate(movement.occurred_on)}</span></div>
+                  <div className="movementInfo"><strong>{movement.description}</strong><span>{movement.category_name || "Sem categoria"} · {formatDate(movement.occurred_on)}{movement.status === "planned" ? " · Pendente" : ""}</span></div>
                   <b className={tone}>{tone === "income" ? "+" : "−"} {formatCurrency(movement.amount)}</b>
                   <div className="movementActions">
+                    {movement.status === "planned" && <button type="button" onClick={() => confirmPlannedMovement(movement)} disabled={confirmingId === movement.id}>{confirmingId === movement.id ? "Confirmando..." : "Confirmar"}</button>}
                     <button type="button" onClick={() => startEditing(movement)}>Editar</button>
                     <button type="button" onClick={() => removeMovement(movement)}>Excluir</button>
                   </div>
@@ -786,14 +806,14 @@ function SettingsView({ session, accountName, onLogout }) {
             <section className="settingsSection" aria-labelledby="automation-title">
               <div className="settingsSectionHeading">
                 <div><p className="eyebrow">AUTOMAÇÃO</p><h2 id="automation-title">Recebimentos recorrentes</h2></div>
-                <span className="settingsBadge">preparação</span>
+                <span className="settingsBadge">motor diário</span>
               </div>
               <label className="settingToggle">
                 <input type="checkbox" checked={draft.auto_confirm_income} onChange={(event) => setDraft((current) => ({ ...current, auto_confirm_income: event.target.checked }))} />
                 <span className="toggleTrack" aria-hidden="true"><i /></span>
                 <span className="settingCopy"><strong>Confirmar automaticamente</strong><small>Quando o processamento automático estiver ativo, recebimentos como salário poderão virar concluídos na data prevista.</small></span>
               </label>
-              <p className="settingsWarning">Por segurança, essa opção ainda não executa ocorrências sozinha. Até o motor automático ser ativado, o botão Registrar continua exigindo sua confirmação.</p>
+              <p className="settingsWarning">Essa opção só funciona quando a rotina diária do Cifro estiver configurada no servidor. Sem ela, o planejamento continua sendo processado manualmente.</p>
             </section>
 
             <section className="settingsSection" aria-labelledby="defaults-title">
@@ -1585,7 +1605,7 @@ export default function Home({ view = "dashboard" }) {
                 return (
                   <div className="movement" key={movement.id}>
                     <span className={`movementMark ${tone}`}>{movement.description.charAt(0).toUpperCase()}</span>
-                    <div className="movementInfo"><strong>{movement.description}</strong><span>{movement.category_name || "Sem categoria"} · {formatDate(movement.occurred_on)}</span></div>
+                    <div className="movementInfo"><strong>{movement.description}</strong><span>{movement.category_name || "Sem categoria"} · {formatDate(movement.occurred_on)}{movement.status === "planned" ? " · Pendente" : ""}</span></div>
                     <b className={tone}>{tone === "income" ? "+" : "−"} {formatCurrency(movement.amount)}</b>
                   </div>
                 );

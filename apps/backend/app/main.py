@@ -167,6 +167,115 @@ def next_commitment_due_date(row: dict) -> date | None:
     return None
 
 
+COMMITMENT_COLUMNS = """
+  c.id, c.user_id, c.category_id, c.name, c.commitment_type, c.direction,
+  c.amount, c.frequency, c.due_rule, c.business_day_number, c.starts_on,
+  c.next_due_on, c.ends_on, c.total_installments, c.current_installment,
+  c.is_active, c.created_at
+"""
+
+
+def process_due_commitments(connection, today: date | None = None) -> int:
+    """Create today's due occurrences once and advance their schedules.
+
+    This intentionally does not backfill every missed month. If the service was
+    offline, the next run creates the current occurrence instead of inventing a
+    large historical block of salary or expenses.
+    """
+    today = today or date.today()
+    rows = connection.execute(
+        f"""
+        select {COMMITMENT_COLUMNS},
+          coalesce(us.auto_confirm_income, false) as auto_confirm_income
+        from public.commitments c
+        left join public.user_settings us on us.user_id = c.user_id
+        where c.is_active = true
+        order by c.user_id, c.next_due_on, c.name
+        for update of c
+        """
+    ).fetchall()
+    processed = 0
+
+    for commitment in rows:
+        if commitment["commitment_type"] == "installment":
+            occurrence_on = commitment["next_due_on"]
+        else:
+            occurrence_on = projected_commitment_date(commitment, today.year, today.month)
+
+        if occurrence_on is None or occurrence_on > today:
+            continue
+
+        existing = connection.execute(
+            """
+            select id
+            from public.transactions
+            where commitment_id = %s and user_id = %s and occurred_on = %s
+            limit 1
+            """,
+            (commitment["id"], commitment["user_id"], occurrence_on),
+        ).fetchone()
+        if existing:
+            continue
+
+        transaction_status = (
+            "completed"
+            if commitment["direction"] == Direction.INCOME and commitment["auto_confirm_income"]
+            else "planned"
+        )
+        connection.execute(
+            """
+            insert into public.transactions (
+              user_id, category_id, commitment_id, description, amount,
+              direction, occurred_on, status, notes
+            )
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                commitment["user_id"],
+                commitment["category_id"],
+                commitment["id"],
+                commitment["name"],
+                commitment["amount"],
+                commitment["direction"],
+                occurrence_on,
+                transaction_status,
+                "Gerado a partir do planejamento",
+            ),
+        )
+
+        commitment_for_advance = dict(commitment)
+        commitment_for_advance["next_due_on"] = occurrence_on
+        next_due_on = next_commitment_due_date(commitment_for_advance)
+        is_installment = commitment["commitment_type"] == "installment"
+        current_installment = commitment["current_installment"]
+        if is_installment and current_installment >= commitment["total_installments"]:
+            is_active = False
+        else:
+            is_active = next_due_on is not None and not (
+                commitment["ends_on"] and next_due_on > commitment["ends_on"]
+            )
+        if is_installment and is_active:
+            current_installment += 1
+
+        connection.execute(
+            """
+            update public.commitments
+            set next_due_on = %s, current_installment = %s, is_active = %s
+            where id = %s and user_id = %s
+            """,
+            (
+                next_due_on or commitment["next_due_on"],
+                current_installment,
+                is_active,
+                commitment["id"],
+                commitment["user_id"],
+            ),
+        )
+        processed += 1
+
+    return processed
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "cifro-api"}
@@ -468,6 +577,45 @@ def record_commitment(
 
         if not commitment:
             raise HTTPException(status_code=404, detail="Commitment not found")
+
+        pending_transaction = connection.execute(
+            """
+            select id, description, amount, direction, occurred_on,
+              category_id, commitment_id, status, notes, created_at, updated_at
+            from public.transactions
+            where commitment_id = %s and user_id = %s and status = 'planned'
+            order by occurred_on asc, created_at asc
+            limit 1
+            """,
+            (commitment_id, user_id),
+        ).fetchone()
+        if pending_transaction:
+            confirmed_transaction = connection.execute(
+                """
+                update public.transactions
+                set status = 'completed'
+                where id = %s and user_id = %s
+                returning id, description, amount, direction, occurred_on,
+                  category_id, commitment_id, status, notes, created_at, updated_at
+                """,
+                (pending_transaction["id"], user_id),
+            ).fetchone()
+            category_name = None
+            if commitment["category_id"]:
+                category = connection.execute(
+                    """
+                    select name
+                    from public.categories
+                    where id = %s and user_id = %s
+                    """,
+                    (commitment["category_id"], user_id),
+                ).fetchone()
+                category_name = category["name"] if category else None
+
+            updated_commitment = dict(commitment)
+            updated_commitment["category_name"] = category_name
+            confirmed_transaction["category_name"] = category_name
+            return {"transaction": confirmed_transaction, "commitment": updated_commitment}
 
         scheduled_due_on = next_projected_commitment_date(commitment, date.today())
         if scheduled_due_on is None or commitment["commitment_type"] == "installment":
