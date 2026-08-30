@@ -284,6 +284,27 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .settingCopy strong { font-size: 12px; }
 .settingCopy small { max-width: 540px; color: #77839b; font-size: 10px; line-height: 1.6; font-weight: 400; }
 .settingsWarning { margin: 18px 0 0 47px; padding: 10px 12px; border-left: 2px solid #d8ad62; color: #d8c08e; background: rgba(177, 126, 49, .1); font-size: 10px; line-height: 1.55; }
+
+.dataLayout { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 68px; padding-top: 72px; }
+.dataMain { min-width: 0; }
+.dataIntro { max-width: 650px; padding-bottom: 42px; border-bottom: 1px solid var(--line); }
+.dataIntro h2 { max-width: 510px; margin-bottom: 15px; font-size: clamp(28px, 4vw, 39px); line-height: 1.08; letter-spacing: -1.5px; }
+.dataIntro p:not(.eyebrow) { max-width: 520px; margin-bottom: 26px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.dataExportButton { min-height: 43px; padding: 0 18px; }
+.dataSection { max-width: 650px; padding-top: 40px; }
+.dataSectionHeading { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.dataSectionHeading h2 { font-size: 18px; }
+.dataFields { display: grid; grid-template-columns: repeat(2, 1fr); border-bottom: 1px solid var(--line-soft); }
+.dataFields div { display: grid; gap: 7px; padding: 16px 0; border-bottom: 1px solid var(--line-soft); }
+.dataFields div:nth-child(odd) { margin-right: 28px; }
+.dataFields span, .dataSummaryLine span { color: #758099; font-size: 10px; }
+.dataFields strong { color: #dce1ed; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 400; }
+.dataHint { margin: 18px 0 0; color: #6f7990; font-size: 10px; line-height: 1.6; }
+.dataSummary { padding-top: 4px; }
+.dataSummary h2 { margin-bottom: 13px; font-size: 20px; line-height: 1.25; }
+.dataSummary > p:not(.eyebrow) { margin-bottom: 28px; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.dataSummaryLine { display: flex; justify-content: space-between; padding: 13px 0; border-top: 1px solid var(--line); }
+.dataSummaryLine b { color: var(--blue-bright); font-size: 11px; font-weight: 600; }
 .settingsFields { display: grid; grid-template-columns: minmax(0, 260px) 180px; gap: 15px; margin-top: 23px; }
 .settingsField { display: grid; gap: 7px; color: #9ca7bd; font-size: 10px; font-weight: 700; }
 .settingsField input, .settingsField select { width: 100%; min-height: 42px; padding: 0 11px; border: 1px solid #2b3854; border-radius: 4px; outline: 0; color: var(--ink); background: #0d1529; font-size: 11px; }
@@ -376,4 +397,8 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
   .settingsActions { align-items: stretch; flex-direction: column; }
   .settingsActions .confirmButton { width: 100%; }
   .settingsWarning { margin-left: 0; }
+  .dataLayout { display: block; padding-top: 45px; }
+  .dataSummary { margin-top: 42px; padding-top: 28px; border-top: 1px solid var(--line); }
+  .dataFields { grid-template-columns: 1fr; }
+  .dataFields div:nth-child(odd) { margin-right: 0; }
 }

@@ -1,3 +1,5 @@
+import csv
+import io
 from calendar import monthrange
 from datetime import date
 from decimal import Decimal
@@ -5,7 +7,7 @@ from typing import Annotated
 from uuid import UUID
 
 import psycopg
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg.errors import UniqueViolation
 
@@ -746,6 +748,48 @@ def list_transactions(
             (user_id, limit, offset),
         ).fetchall()
     return list(rows)
+
+
+@router.get("/transactions/export")
+def export_transactions(user_id: UUID = Depends(current_user_id)) -> Response:
+    """Export all user transactions in a spreadsheet-friendly CSV format."""
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            select
+              t.description, t.amount, t.direction, t.occurred_on,
+              t.status, t.notes, c.name as category_name
+            from public.transactions t
+            left join public.categories c
+              on c.id = t.category_id and c.user_id = t.user_id
+            where t.user_id = %s
+            order by t.occurred_on asc, t.created_at asc
+            """,
+            (user_id,),
+        ).fetchall()
+
+    output = io.StringIO()
+    output.write("\ufeff")
+    writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
+    writer.writerow(["data", "descricao", "valor", "tipo", "categoria", "status", "observacoes"])
+    for row in rows:
+        writer.writerow(
+            [
+                row["occurred_on"].isoformat(),
+                row["description"],
+                f"{row['amount']:.2f}".replace(".", ","),
+                "recebimento" if row["direction"] == Direction.INCOME else "gasto",
+                row["category_name"] or "",
+                "concluido" if row["status"] == "completed" else "pendente",
+                row["notes"] or "",
+            ]
+        )
+
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="cifro-movimentacoes.csv"'},
+    )
 
 
 @router.post("/transactions", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)

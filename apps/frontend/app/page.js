@@ -210,6 +210,7 @@ function Sidebar({ active, accountName, onLogout }) {
         <a className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</a>
         <a className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejamento</a>
         <a className={active === "categories" ? "navItem active" : "navItem"} href="/categorias">Categorias</a>
+        <a className={active === "data" ? "navItem active" : "navItem"} href="/dados">Dados</a>
         <a className={active === "settings" ? "navItem active" : "navItem"} href="/configuracoes">Configurações</a>
       </nav>
 
@@ -853,6 +854,91 @@ function SettingsView({ session, accountName, onLogout }) {
               <div><span>Domingo</span><b>Não conta</b></div>
             </div>
             <a className="asideLink" href="/planejamento">Abrir planejamento <span>→</span></a>
+          </aside>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function DataView({ session, accountName, onLogout }) {
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  async function exportTransactions() {
+    setBusy(true);
+    setNotice("");
+    try {
+      const response = await fetch(`${API_URL}/api/v1/transactions/export`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || "Não foi possível exportar os registros.");
+      }
+
+      const file = await response.blob();
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "cifro-movimentacoes.csv";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setNotice("Exportação concluída");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="shell">
+      <Sidebar active="data" accountName={accountName} onLogout={onLogout} />
+      <section className="content dataContent">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">SEUS DADOS</p>
+            <h1>Leve seus dados com você.</h1>
+          </div>
+          <a className="backLink" href="/">← Visão geral</a>
+        </header>
+
+        <div className="dataLayout">
+          <div className="dataMain">
+            <section className="dataIntro">
+              <p className="eyebrow">EXPORTAÇÃO</p>
+              <h2>Uma cópia clara do que aconteceu.</h2>
+              <p>Baixe todas as suas movimentações em um CSV compatível com Excel, Google Sheets e outros editores.</p>
+              <button className="confirmButton dataExportButton" type="button" onClick={exportTransactions} disabled={busy}>
+                {busy ? "Preparando arquivo..." : "Baixar movimentações"}
+              </button>
+            </section>
+
+            {notice && <p className="notice" role="status">{notice}</p>}
+
+            <section className="dataSection" aria-labelledby="export-format-title">
+              <div className="dataSectionHeading">
+                <div><p className="eyebrow">FORMATO</p><h2 id="export-format-title">Feito para abrir sem surpresa.</h2></div>
+              </div>
+              <div className="dataFields">
+                <div><span>Arquivo</span><strong>cifro-movimentacoes.csv</strong></div>
+                <div><span>Separador</span><strong>Ponto e vírgula</strong></div>
+                <div><span>Valores</span><strong>Decimal brasileiro</strong></div>
+                <div><span>Datas</span><strong>AAAA-MM-DD</strong></div>
+              </div>
+              <p className="dataHint">O valor é exportado sem o símbolo “R$”, para continuar sendo reconhecido como número na planilha.</p>
+            </section>
+          </div>
+
+          <aside className="dataSummary" aria-labelledby="data-summary-title">
+            <p className="eyebrow">PRÓXIMA ETAPA</p>
+            <h2 id="data-summary-title">Importar sem perder o controle.</h2>
+            <p>Depois da exportação, vamos criar a importação com pré-visualização, validação por linha e confirmação antes de salvar.</p>
+            <div className="dataSummaryLine"><span>Agora</span><b>Exportar</b></div>
+            <div className="dataSummaryLine"><span>Depois</span><b>Importar</b></div>
           </aside>
         </div>
       </section>
@@ -1511,6 +1597,10 @@ export default function Home({ view = "dashboard" }) {
 
   if (view === "settings") {
     return <SettingsView session={session} accountName={accountName} onLogout={handleLogout} />;
+  }
+
+  if (view === "data") {
+    return <DataView session={session} accountName={accountName} onLogout={handleLogout} />;
   }
 
   const current = dashboard?.current || { income: 0, expenses: 0, available: 0 };
