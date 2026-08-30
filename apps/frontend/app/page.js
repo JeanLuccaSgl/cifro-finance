@@ -37,7 +37,7 @@ function localDate() {
 
 function parseQuickEntry(text) {
   const amountMatch = text.match(
-    /(?:r\$\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i,
+    /(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?!\d)/i,
   );
 
   if (!amountMatch) return null;
@@ -45,9 +45,13 @@ function parseQuickEntry(text) {
   const rawAmount = amountMatch[1];
   const normalizedAmount = rawAmount.includes(",")
     ? rawAmount.replace(/\./g, "").replace(",", ".")
+    : /^\d{1,3}(?:\.\d{3})+$/.test(rawAmount)
+      ? rawAmount.replace(/\./g, "")
     : rawAmount;
   const amount = Number(normalizedAmount);
-  const isIncome = /recebi|entrou|ganhei|sal[aá]rio|freela|freelance|renda/i.test(text);
+  const hasIncomeSign = /^\s*\+/.test(text) || /\+\s*$/.test(text);
+  const hasExpenseSign = /^\s*-/.test(text) || /-\s*$/.test(text);
+  const isIncome = hasIncomeSign || (!hasExpenseSign && /recebi|entrou|ganhei|sal[aá]rio|freela|freelance|renda/i.test(text));
 
   return {
     description: text,
@@ -171,8 +175,18 @@ function Sidebar({ active, accountName, onLogout }) {
 function RegisterView({ session, accountName, onLogout }) {
   const [text, setText] = useState("");
   const [movements, setMovements] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const [pendingMovement, setPendingMovement] = useState(null);
+  const [pendingDescription, setPendingDescription] = useState("");
+  const [pendingAmount, setPendingAmount] = useState("");
+  const [pendingDirection, setPendingDirection] = useState("expense");
+  const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryKind, setNewCategoryKind] = useState("expense");
+  const [categoryBusy, setCategoryBusy] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   async function loadMovements() {
     setLoading(true);
@@ -186,11 +200,21 @@ function RegisterView({ session, accountName, onLogout }) {
     }
   }
 
+  async function loadCategories() {
+    try {
+      const data = await apiRequest("/api/v1/categories", session);
+      setCategories(data);
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }
+
   useEffect(() => {
     loadMovements();
+    loadCategories();
   }, [session]);
 
-  async function registerMovement(event) {
+  function registerMovement(event) {
     event.preventDefault();
     const cleanText = text.trim();
     if (!cleanText) return;
@@ -201,18 +225,84 @@ function RegisterView({ session, accountName, onLogout }) {
       return;
     }
 
+    setPendingMovement(movement);
+    setPendingDescription(movement.description);
+    setPendingAmount(String(movement.amount));
+    setPendingDirection(movement.direction);
+    setSelectedCategoryId("");
+    setNewCategoryName("");
+    setNewCategoryKind(movement.direction);
+    setNotice("");
+  }
+
+  function changePendingDirection(direction) {
+    setPendingDirection(direction);
+    setNewCategoryKind(direction);
+    const selectedCategory = categories.find((category) => category.id === selectedCategoryId);
+    if (selectedCategory && selectedCategory.kind !== "both" && selectedCategory.kind !== direction) {
+      setSelectedCategoryId("");
+    }
+  }
+
+  async function createCategory() {
+    const cleanName = newCategoryName.trim();
+    if (!cleanName) return;
+
+    setCategoryBusy(true);
+    try {
+      const category = await apiRequest("/api/v1/categories", session, {
+        method: "POST",
+        body: JSON.stringify({ name: cleanName, kind: newCategoryKind }),
+      });
+      setCategories((current) => [...current, category].sort((a, b) => a.name.localeCompare(b.name)));
+      if (category.kind === "both" || category.kind === pendingDirection) {
+        setSelectedCategoryId(category.id);
+      }
+      setNewCategoryName("");
+      setNotice(`Categoria “${category.name}” criada`);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setCategoryBusy(false);
+    }
+  }
+
+  async function confirmMovement(event) {
+    event.preventDefault();
+    const amount = Number(String(pendingAmount).replace(",", "."));
+    const description = pendingDescription.trim();
+
+    if (!description || !Number.isFinite(amount) || amount <= 0) {
+      setNotice("Confira a descrição e informe um valor maior que zero.");
+      return;
+    }
+
+    setConfirmBusy(true);
     try {
       await apiRequest("/api/v1/transactions", session, {
         method: "POST",
-        body: JSON.stringify(movement),
+        body: JSON.stringify({
+          ...pendingMovement,
+          description,
+          amount,
+          direction: pendingDirection,
+          category_id: selectedCategoryId || null,
+        }),
       });
+      setPendingMovement(null);
       setText("");
-      setNotice("Movimentação registrada");
+      setNotice("Movimentação confirmada");
       await loadMovements();
     } catch (error) {
       setNotice(error.message);
+    } finally {
+      setConfirmBusy(false);
     }
   }
+
+  const compatibleCategories = categories.filter(
+    (category) => category.kind === "both" || category.kind === pendingDirection,
+  );
 
   return (
     <main className="shell">
@@ -247,6 +337,92 @@ function RegisterView({ session, accountName, onLogout }) {
           <span>gastei 28 no almoço</span>
           <span>recebi 480 de freelance</span>
         </div>
+
+        {pendingMovement && (
+          <form className="confirmationPanel" onSubmit={confirmMovement}>
+            <div className="confirmationHeader">
+              <div>
+                <p className="eyebrow">CONFIRME ANTES DE SALVAR</p>
+                <h3>Está tudo certo?</h3>
+              </div>
+              <button
+                className="cancelButton"
+                type="button"
+                onClick={() => setPendingMovement(null)}
+              >
+                Cancelar
+              </button>
+            </div>
+
+            <div className="confirmationGrid">
+              <label className="confirmationField">
+                <span>Tipo</span>
+                <select value={pendingDirection} onChange={(event) => changePendingDirection(event.target.value)}>
+                  <option value="expense">Gasto</option>
+                  <option value="income">Recebimento</option>
+                </select>
+              </label>
+              <label className="confirmationField">
+                <span>Valor</span>
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={pendingAmount}
+                  onChange={(event) => setPendingAmount(event.target.value)}
+                />
+              </label>
+              <label className="confirmationField confirmationWide">
+                <span>Descrição</span>
+                <input
+                  value={pendingDescription}
+                  onChange={(event) => setPendingDescription(event.target.value)}
+                  maxLength={160}
+                />
+              </label>
+              <label className="confirmationField confirmationWide">
+                <span>Categoria <small>opcional</small></span>
+                <select value={selectedCategoryId} onChange={(event) => setSelectedCategoryId(event.target.value)}>
+                  <option value="">Sem categoria</option>
+                  {compatibleCategories.map((category) => (
+                    <option key={category.id} value={category.id}>{category.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="categoryCreator">
+              <span className="categoryCreatorLabel">Criar categoria</span>
+              <input
+                value={newCategoryName}
+                onChange={(event) => setNewCategoryName(event.target.value)}
+                placeholder={pendingDirection === "income" ? "Ex.: Salário" : "Ex.: Alimentação"}
+                maxLength={80}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    createCategory();
+                  }
+                }}
+              />
+              <select value={newCategoryKind} onChange={(event) => setNewCategoryKind(event.target.value)} aria-label="Tipo da nova categoria">
+                <option value="expense">Para gastos</option>
+                <option value="income">Para recebimentos</option>
+                <option value="both">Para os dois</option>
+              </select>
+              <button className="secondaryButton" type="button" onClick={createCategory} disabled={categoryBusy || !newCategoryName.trim()}>
+                {categoryBusy ? "Criando..." : "Criar"}
+              </button>
+            </div>
+
+            <div className="confirmationActions">
+              <span>Hoje · {pendingDirection === "income" ? "recebimento" : "gasto"}</span>
+              <button className="confirmButton" type="submit" disabled={confirmBusy}>
+                {confirmBusy ? "Salvando..." : "Confirmar registro"}
+              </button>
+            </div>
+          </form>
+        )}
         {notice && <p className="notice" role="status">{notice}</p>}
 
         <section className="registerHistory" aria-labelledby="history-title">

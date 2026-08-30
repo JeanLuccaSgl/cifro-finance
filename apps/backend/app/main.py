@@ -146,7 +146,18 @@ def create_transaction(payload: TransactionCreate, user_id: UUID = Depends(curre
                 payload.notes,
             ),
         ).fetchone()
-    row["category_name"] = None
+        category_name = None
+        if payload.category_id:
+            category = connection.execute(
+                """
+                select name
+                from public.categories
+                where id = %s and user_id = %s
+                """,
+                (payload.category_id, user_id),
+            ).fetchone()
+            category_name = category["name"] if category else None
+    row["category_name"] = category_name
     return row
 
 
