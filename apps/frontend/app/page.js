@@ -35,6 +35,24 @@ function localDate() {
   return `${year}-${month}-${day}`;
 }
 
+function inferDirection(text) {
+  const hasIncomeSign = /^\s*\+/.test(text) || /\+\s*$/.test(text);
+  const hasExpenseSign = /^\s*-/.test(text) || /-\s*$/.test(text);
+  if (hasIncomeSign) return "income";
+  if (hasExpenseSign) return "expense";
+  if (/recebi|entrou|ganhei|sal[aá]rio|freela|freelance|renda/i.test(text)) return "income";
+  if (/gastei|paguei|comprei|pagar|compra|despesa|conta/i.test(text)) return "expense";
+  return null;
+}
+
+function isValidDateInput(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  if (year < 1900 || year > 2100) return false;
+  const parsed = new Date(year, month - 1, day);
+  return parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day;
+}
+
 function parseQuickEntry(text) {
   const amountMatch = text.match(
     /(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)(?!\d)/i,
@@ -49,14 +67,12 @@ function parseQuickEntry(text) {
       ? rawAmount.replace(/\./g, "")
     : rawAmount;
   const amount = Number(normalizedAmount);
-  const hasIncomeSign = /^\s*\+/.test(text) || /\+\s*$/.test(text);
-  const hasExpenseSign = /^\s*-/.test(text) || /-\s*$/.test(text);
-  const isIncome = hasIncomeSign || (!hasExpenseSign && /recebi|entrou|ganhei|sal[aá]rio|freela|freelance|renda/i.test(text));
+  const directionHint = inferDirection(text);
 
   return {
     description: text,
     amount,
-    direction: isIncome ? "income" : "expense",
+    direction: directionHint || "expense",
     occurred_on: localDate(),
     status: "completed",
   };
@@ -328,7 +344,7 @@ function RegisterView({ session, accountName, onLogout }) {
     const description = editDescription.trim();
     const amount = Number(String(editAmount).replace(",", "."));
 
-    if (!description || !Number.isFinite(amount) || amount <= 0 || !editDate) {
+    if (!description || !Number.isFinite(amount) || amount <= 0 || !isValidDateInput(editDate)) {
       setNotice("Confira a descrição, o valor e a data.");
       return;
     }
@@ -379,6 +395,10 @@ function RegisterView({ session, accountName, onLogout }) {
   const compatibleCategories = categories.filter(
     (category) => category.kind === "both" || category.kind === pendingDirection,
   );
+  const directionHint = pendingMovement ? inferDirection(pendingDescription) : null;
+  const directionConflict = directionHint && directionHint !== pendingDirection;
+  const editDirectionHint = editingMovement ? inferDirection(editDescription) : null;
+  const editDirectionConflict = editDirectionHint && editDirectionHint !== editDirection;
 
   return (
     <main className="shell">
@@ -467,6 +487,12 @@ function RegisterView({ session, accountName, onLogout }) {
               </label>
             </div>
 
+            {directionConflict && (
+              <p className="directionWarning" role="alert">
+                A descrição parece indicar um {directionHint === "income" ? "recebimento" : "gasto"}, mas o tipo está como {pendingDirection === "income" ? "recebimento" : "gasto"}. Confira antes de confirmar.
+              </p>
+            )}
+
             <div className="categoryCreator">
               <span className="categoryCreatorLabel">Criar categoria</span>
               <input
@@ -527,7 +553,7 @@ function RegisterView({ session, accountName, onLogout }) {
               </label>
               <label className="confirmationField">
                 <span>Data</span>
-                <input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} />
+                <input type="date" min="1900-01-01" max="2100-12-31" value={editDate} onChange={(event) => setEditDate(event.target.value)} />
               </label>
               <label className="confirmationField">
                 <span>Categoria <small>opcional</small></span>
@@ -539,6 +565,11 @@ function RegisterView({ session, accountName, onLogout }) {
                 </select>
               </label>
             </div>
+            {editDirectionConflict && (
+              <p className="directionWarning" role="alert">
+                A descrição parece indicar um {editDirectionHint === "income" ? "recebimento" : "gasto"}, mas o tipo está como {editDirection === "income" ? "recebimento" : "gasto"}. Confira antes de salvar.
+              </p>
+            )}
             <div className="confirmationActions">
               <span>Alteração manual</span>
               <button className="confirmButton" type="submit" disabled={editBusy}>{editBusy ? "Salvando..." : "Salvar alterações"}</button>
