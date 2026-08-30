@@ -83,7 +83,9 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .quickEntry input::placeholder { color: #66728b; }
 .quickEntry button { border: 0; border-radius: 5px; padding: 13px 20px; color: white; background: #6685ed; font-size: 11px; font-weight: 800; cursor: pointer; }
 .quickEntry button:hover { background: #7895fb; }
-.quickEntry button:focus-visible, .quickEntry input:focus-visible, .periodButton:focus-visible, .navItem:focus-visible, .seeAll:focus-visible, .moreButton:focus-visible { outline: 2px solid var(--blue-bright); outline-offset: 3px; }
+.quickEntry button:focus-visible, .periodButton:focus-visible, .navItem:focus-visible, .seeAll:focus-visible, .moreButton:focus-visible { outline: 2px solid var(--blue-bright); outline-offset: 3px; }
+.quickEntry:focus-within { border-color: #41527b; box-shadow: 0 0 0 2px rgba(118, 149, 255, .06); }
+.quickEntry input:focus-visible { outline: 1px solid #5c6f9f; outline-offset: 1px; border-radius: 2px; }
 .notice { margin: 8px 0 -6px; color: var(--green); font-family: 'DM Mono', monospace; font-size: 10px; }
 
 .lowerGrid { display: grid; grid-template-columns: 1.08fr .92fr; gap: 40px; margin-top: 39px; }
@@ -99,19 +101,19 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .seeAll { color: #8b96ae; font-size: 10px; }
 .seeAll span { color: var(--blue-bright); margin-left: 3px; }
 .movementList { display: grid; }
-.movement { display: grid; grid-template-columns: 29px 1fr auto; align-items: center; gap: 12px; min-height: 57px; border-bottom: 1px solid var(--line-soft); }
+.movement { display: grid; grid-template-columns: 29px 1fr auto; align-items: center; gap: 12px; min-height: 68px; border-bottom: 1px solid var(--line-soft); }
 .movementMark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 4px; font-family: 'DM Mono', monospace; font-size: 11px; }
 .movementMark.expense { border: 1px solid rgba(205, 96, 103, .3); color: var(--red); background: rgba(146, 47, 58, .18); }
 .movementMark.income { border: 1px solid rgba(71, 171, 140, .25); color: var(--green); background: rgba(32, 123, 98, .18); }
 .movementInfo strong, .movementInfo span { display: block; }
-.movementInfo strong { margin-bottom: 4px; font-size: 11px; }
-.movementInfo span { color: #6e7890; font-size: 9px; }
-.movement > b { font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; }
+.movementInfo strong { margin-bottom: 5px; font-size: 13px; }
+.movementInfo span { color: #6e7890; font-size: 10px; }
+.movement > b { font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; }
 .movement > b.expense { color: #c7ccd9; }
 .movement > b.income { color: var(--green); }
 .registerHistory .movement { grid-template-columns: 29px minmax(0, 1fr) auto auto; }
 .movementActions, .rowActions { display: flex; align-items: center; gap: 9px; }
-.movementActions button, .rowActions button { border: 0; padding: 0; color: #77839d; background: transparent; font-size: 9px; cursor: pointer; }
+.movementActions button, .rowActions button { border: 0; padding: 0; color: #77839d; background: transparent; font-size: 10px; cursor: pointer; }
 .movementActions button:hover, .rowActions button:hover { color: var(--blue-bright); }
 .movementActions button:last-child, .rowActions button:last-child { color: #b4787e; }
 .movementActions button:last-child:hover, .rowActions button:last-child:hover { color: var(--red); }
@@ -168,7 +170,7 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .confirmationActions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; padding-top: 17px; border-top: 1px solid var(--line); color: #68738b; font-family: 'DM Mono', monospace; font-size: 9px; }
 .confirmButton { min-height: 42px; border: 0; border-radius: 4px; padding: 0 16px; color: #fff; background: #6685ed; font-size: 10px; font-weight: 800; cursor: pointer; }
 .confirmButton:hover { background: #7895fb; }
-.registerHistory { max-width: 700px; margin-top: 72px; }
+.registerHistory { max-width: 700px; margin-top: 82px; }
 .editPanel { max-width: 700px; margin-top: 26px; padding: 22px; border: 1px solid #2b3854; background: #0b1327; }
 .categoryContent { max-width: 1320px; }
 .categoryIntro { max-width: 550px; padding: 70px 0 30px; }
@@ -182,11 +184,11 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .categoryCreate .confirmButton { min-height: 42px; white-space: nowrap; }
 .categoryListSection { max-width: 700px; margin-top: 58px; }
 .categoryList { display: grid; }
-.categoryRow { display: grid; grid-template-columns: minmax(0, 1fr) 170px auto; align-items: center; gap: 14px; min-height: 61px; border-bottom: 1px solid var(--line-soft); }
+.categoryRow { display: grid; grid-template-columns: minmax(0, 1fr) 170px auto; align-items: center; gap: 14px; min-height: 72px; border-bottom: 1px solid var(--line-soft); }
 .categoryName { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.categoryName strong { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.categoryName strong { overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
 .categoryDot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); }
-.categoryKind { color: #737f98; font-family: 'DM Mono', monospace; font-size: 9px; }
+.categoryKind { color: #737f98; font-size: 10px; }
 .categoryEditName { min-width: 0; }
 .categoryRow > select { width: 100%; min-height: 36px; font-size: 10px; }
 .registrationMain .registrationEntry, .registrationMain .confirmationPanel, .registrationMain .editPanel, .registrationMain .registerHistory { max-width: none; }
