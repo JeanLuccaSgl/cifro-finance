@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getSupabaseBrowserClient } from "../lib/supabase";
+import { useSession } from "./providers";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -200,18 +202,18 @@ function Login({ email, password, setEmail, setPassword, onSubmit, error, busy }
 function Sidebar({ active, accountName, onLogout }) {
   return (
     <aside className="sidebar">
-      <a className="brand" href="/" aria-label="Cifro">
+      <Link className="brand" href="/" aria-label="Cifro">
         <span className="brandMark"><i /><i /></span>
         <span>cifro</span>
-      </a>
+      </Link>
 
       <nav className="mainNav" aria-label="Navegação principal">
-        <a className={active === "dashboard" ? "navItem active" : "navItem"} href="/">Visão geral</a>
-        <a className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</a>
-        <a className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejamento</a>
-        <a className={active === "categories" ? "navItem active" : "navItem"} href="/categorias">Categorias</a>
-        <a className={active === "data" ? "navItem active" : "navItem"} href="/dados">Dados</a>
-        <a className={active === "settings" ? "navItem active" : "navItem"} href="/configuracoes">Configurações</a>
+        <Link className={active === "dashboard" ? "navItem active" : "navItem"} href="/">Visão geral</Link>
+        <Link className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</Link>
+        <Link className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejamento</Link>
+        <Link className={active === "categories" ? "navItem active" : "navItem"} href="/categorias">Categorias</Link>
+        <Link className={active === "data" ? "navItem active" : "navItem"} href="/dados">Dados</Link>
+        <Link className={active === "settings" ? "navItem active" : "navItem"} href="/configuracoes">Configurações</Link>
       </nav>
 
       <div className="account">
@@ -485,7 +487,7 @@ function RegisterView({ session, accountName, onLogout }) {
             <p className="eyebrow">NOVA MOVIMENTAÇÃO</p>
             <h1>Registre sem interromper o dia.</h1>
           </div>
-          <a className="backLink" href="/">← Visão geral</a>
+          <Link className="backLink" href="/">← Visão geral</Link>
         </header>
 
         <div className="registrationLayout">
@@ -707,7 +709,7 @@ function RegisterView({ session, accountName, onLogout }) {
                 </button>
               ))}
             </div>
-            <a className="asideLink" href="/categorias">Gerenciar categorias <span>→</span></a>
+            <Link className="asideLink" href="/categorias">Gerenciar categorias <span>→</span></Link>
           </aside>
         </div>
       </section>
@@ -793,7 +795,7 @@ function SettingsView({ session, accountName, onLogout }) {
             <p className="eyebrow">CONFIGURAÇÕES</p>
             <h1>Defina como o Cifro deve pensar.</h1>
           </div>
-          <a className="backLink" href="/">← Visão geral</a>
+          <Link className="backLink" href="/">← Visão geral</Link>
         </header>
 
         <div className="settingsLayout">
@@ -853,7 +855,7 @@ function SettingsView({ session, accountName, onLogout }) {
               <div><span>Sábado</span><b>Conta</b></div>
               <div><span>Domingo</span><b>Não conta</b></div>
             </div>
-            <a className="asideLink" href="/planejamento">Abrir planejamento <span>→</span></a>
+            <Link className="asideLink" href="/planejamento">Abrir planejamento <span>→</span></Link>
           </aside>
         </div>
       </section>
@@ -943,7 +945,7 @@ function DataView({ session, accountName, onLogout }) {
             <p className="eyebrow">SEUS DADOS</p>
             <h1>Leve seus dados com você.</h1>
           </div>
-          <a className="backLink" href="/">← Visão geral</a>
+          <Link className="backLink" href="/">← Visão geral</Link>
         </header>
 
         <div className="dataLayout">
@@ -1283,7 +1285,7 @@ function PlanningView({ session, accountName, onLogout }) {
             <p className="eyebrow">PLANEJAMENTO</p>
             <h1>Organize o que ainda vai acontecer.</h1>
           </div>
-          <a className="backLink" href="/">← Visão geral</a>
+          <Link className="backLink" href="/">← Visão geral</Link>
         </header>
 
         <div className="planningLayout">
@@ -1420,7 +1422,7 @@ function PlanningView({ session, accountName, onLogout }) {
               <div><strong>Parcelas</strong><span>Entram somente na data da próxima parcela, com o progresso visível.</span></div>
               <div><strong>Registros reais</strong><span>O planejamento não altera o saldo de hoje nem duplica uma movimentação.</span></div>
             </div>
-            <a className="asideLink" href="/">Voltar para a visão geral <span>→</span></a>
+            <Link className="asideLink" href="/">Voltar para a visão geral <span>→</span></Link>
           </aside>
         </div>
       </section>
@@ -1529,7 +1531,7 @@ function CategoriesView({ session, accountName, onLogout }) {
             <p className="eyebrow">ORGANIZAÇÃO</p>
             <h1>Suas categorias.</h1>
           </div>
-          <a className="backLink" href="/registrar">← Registrar</a>
+          <Link className="backLink" href="/registrar">← Registrar</Link>
         </header>
 
         <div className="categoryLayout">
@@ -1607,7 +1609,7 @@ function CategoriesView({ session, accountName, onLogout }) {
               <div><span>Para recebimentos</span><b>{incomeCategoryCount}</b></div>
               <div><span>Para os dois</span><b>{sharedCategoryCount}</b></div>
             </div>
-            <a className="asideLink" href="/registrar">Registrar movimentação <span>→</span></a>
+            <Link className="asideLink" href="/registrar">Registrar movimentação <span>→</span></Link>
           </aside>
         </div>
       </section>
@@ -1616,8 +1618,7 @@ function CategoriesView({ session, accountName, onLogout }) {
 }
 
 export default function Home({ view = "dashboard" }) {
-  const [authReady, setAuthReady] = useState(false);
-  const [session, setSession] = useState(null);
+  const { session, authReady, authError: providerAuthError } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
@@ -1625,39 +1626,6 @@ export default function Home({ view = "dashboard" }) {
   const [dashboard, setDashboard] = useState(null);
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const [notice, setNotice] = useState("");
-
-  useEffect(() => {
-    let mounted = true;
-    let supabase;
-
-    try {
-      supabase = getSupabaseBrowserClient();
-    } catch (error) {
-      setAuthError(error.message);
-      setAuthReady(true);
-      return undefined;
-    }
-
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setSession(data.session);
-      setAuthReady(true);
-      if (data.session) loadDashboard(data.session);
-    });
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (!mounted) return;
-      setSession(nextSession);
-      setAuthReady(true);
-      if (nextSession) loadDashboard(nextSession);
-      else setDashboard(null);
-    });
-
-    return () => {
-      mounted = false;
-      listener.subscription.unsubscribe();
-    };
-  }, []);
 
   async function loadDashboard(activeSession = session) {
     if (!activeSession) return;
@@ -1671,6 +1639,12 @@ export default function Home({ view = "dashboard" }) {
       setLoadingDashboard(false);
     }
   }
+
+  useEffect(() => {
+    if (view !== "dashboard") return;
+    if (session) loadDashboard(session);
+    else setDashboard(null);
+  }, [session, view]);
 
   async function handleLogin(event) {
     event.preventDefault();
@@ -1704,7 +1678,7 @@ export default function Home({ view = "dashboard" }) {
         setEmail={setEmail}
         setPassword={setPassword}
         onSubmit={handleLogin}
-        error={authError}
+        error={providerAuthError || authError}
         busy={authBusy}
       />
     );
@@ -1783,7 +1757,7 @@ export default function Home({ view = "dashboard" }) {
               <Progress value={nextUsed} label={`${nextUsed}% comprometido`} detail={`${dashboard?.next_month_commitments?.length || 0} itens previstos`} accent />
               {dashboard?.next_month_commitments?.length ? (
                 <div className="commitmentPreview">
-                  <div className="commitmentPreviewHeader"><span>Próximas cobranças</span><a href="/planejamento">ver todas</a></div>
+                  <div className="commitmentPreviewHeader"><span>Próximas cobranças</span><Link href="/planejamento">ver todas</Link></div>
                   {dashboard.next_month_commitments.slice(0, 3).map((commitment) => (
                     <div className="commitmentPreviewRow" key={commitment.id}>
                       <span>{formatDate(commitment.next_due_on)}</span>
@@ -1793,7 +1767,7 @@ export default function Home({ view = "dashboard" }) {
                   ))}
                 </div>
               ) : (
-                <p className="commitmentEmpty">Nenhum compromisso previsto ainda. <a href="/planejamento">Planejar</a></p>
+                <p className="commitmentEmpty">Nenhum compromisso previsto ainda. <Link href="/planejamento">Planejar</Link></p>
               )}
             </article>
           </div>
