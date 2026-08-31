@@ -38,6 +38,12 @@ class CommitmentDueRule(StrEnum):
     BUSINESS_DAY = "business_day"
 
 
+class BudgetBaseMode(StrEnum):
+    TOTAL_INCOME = "total_income"
+    CATEGORY_INCOME = "category_income"
+    MANUAL = "manual"
+
+
 class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     kind: CategoryKind
@@ -163,6 +169,60 @@ class UserSettingsUpdate(BaseModel):
     default_business_day_number: int = Field(gt=0, le=31)
 
 
+class BudgetSettingsUpdate(BaseModel):
+    base_mode: BudgetBaseMode
+    income_category_id: UUID | None = None
+    manual_amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+
+    @model_validator(mode="after")
+    def validate_base(self):
+        if self.base_mode == BudgetBaseMode.CATEGORY_INCOME:
+            if self.income_category_id is None or self.manual_amount is not None:
+                raise ValueError("Category income requires only income_category_id")
+        elif self.base_mode == BudgetBaseMode.MANUAL:
+            if self.manual_amount is None or self.income_category_id is not None:
+                raise ValueError("Manual base requires only manual_amount")
+        elif self.income_category_id is not None or self.manual_amount is not None:
+            raise ValueError("Total income does not accept a category or manual amount")
+        return self
+
+
+class BudgetSettingsRead(BudgetSettingsUpdate):
+    income_category_name: str | None = None
+    updated_at: datetime
+
+
+class BudgetAllocationUpdate(BaseModel):
+    percentage: Decimal = Field(gt=0, le=100, max_digits=5, decimal_places=2)
+
+
+class BudgetAllocationRead(BaseModel):
+    category_id: UUID
+    category_name: str
+    percentage: Decimal
+    target_amount: Decimal
+    actual_amount: Decimal
+    remaining_amount: Decimal
+
+
+class BudgetSummaryRead(BaseModel):
+    month: str
+    settings: BudgetSettingsRead
+    base_amount: Decimal
+    total_percentage: Decimal
+    unallocated_percentage: Decimal
+    unallocated_amount: Decimal
+    allocations: list[BudgetAllocationRead]
+
+
+class BudgetDashboardRead(BaseModel):
+    base_amount: Decimal
+    total_percentage: Decimal
+    unallocated_percentage: Decimal
+    unallocated_amount: Decimal
+    allocation_count: int
+
+
 class DashboardPeriod(BaseModel):
     income: Decimal
     expenses: Decimal
@@ -186,3 +246,4 @@ class DashboardRead(BaseModel):
     next_month_summary: DashboardPeriod
     next_month_commitments: list[CommitmentPreview]
     recent_transactions: list[TransactionRead]
+    budget: BudgetDashboardRead | None = None

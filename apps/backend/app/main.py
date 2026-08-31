@@ -11,12 +11,19 @@ from uuid import UUID
 import psycopg
 from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from psycopg.errors import UniqueViolation
+from psycopg.errors import CheckViolation, UniqueViolation
 from openpyxl import load_workbook
 
 from .config import settings
 from .db import get_connection
 from .schemas import (
+    BudgetAllocationRead,
+    BudgetAllocationUpdate,
+    BudgetBaseMode,
+    BudgetDashboardRead,
+    BudgetSettingsRead,
+    BudgetSettingsUpdate,
+    BudgetSummaryRead,
     CategoryCreate,
     CategoryRead,
     CategoryUpdate,
@@ -737,6 +744,11 @@ def update_category(
             ).fetchone()
     except UniqueViolation as error:
         raise HTTPException(status_code=409, detail="Category already exists") from error
+    except CheckViolation as error:
+        raise HTTPException(
+            status_code=409,
+            detail="Category is being used by the budget distribution",
+        ) from error
 
     if not row:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -757,6 +769,228 @@ def delete_category(category_id: UUID, user_id: UUID = Depends(current_user_id))
 
     if not row:
         raise HTTPException(status_code=404, detail="Category not found")
+
+
+def get_budget_settings(connection, user_id: UUID) -> dict:
+    connection.execute(
+        """
+        insert into public.budget_settings (user_id)
+        values (%s)
+        on conflict (user_id) do nothing
+        """,
+        (user_id,),
+    )
+    return connection.execute(
+        """
+        select
+          bs.base_mode, bs.income_category_id, bs.manual_amount,
+          bs.updated_at, c.name as income_category_name
+        from public.budget_settings bs
+        left join public.categories c
+          on c.id = bs.income_category_id and c.user_id = bs.user_id
+        where bs.user_id = %s
+        """,
+        (user_id,),
+    ).fetchone()
+
+
+def build_budget_summary(connection, user_id: UUID, year: int, month: int) -> dict:
+    period_start, period_end = month_bounds(year, month)
+    settings_row = get_budget_settings(connection, user_id)
+
+    if settings_row["base_mode"] == BudgetBaseMode.MANUAL:
+        base_amount = as_money(settings_row["manual_amount"])
+    else:
+        category_filter = ""
+        parameters: list[object] = [user_id, period_start, period_end]
+        if settings_row["base_mode"] == BudgetBaseMode.CATEGORY_INCOME:
+            category_filter = "and category_id = %s"
+            parameters.append(settings_row["income_category_id"])
+        base_row = connection.execute(
+            f"""
+            select coalesce(sum(amount), 0) as total
+            from public.transactions
+            where user_id = %s
+              and status = 'completed'
+              and direction = 'income'
+              and occurred_on >= %s and occurred_on < %s
+              {category_filter}
+            """,
+            tuple(parameters),
+        ).fetchone()
+        base_amount = as_money(base_row["total"])
+
+    allocation_rows = connection.execute(
+        """
+        select
+          ba.category_id, c.name as category_name, ba.percentage,
+          coalesce(sum(t.amount), 0) as actual_amount
+        from public.budget_allocations ba
+        join public.categories c
+          on c.id = ba.category_id and c.user_id = ba.user_id
+        left join public.transactions t
+          on t.user_id = ba.user_id
+         and t.category_id = ba.category_id
+         and t.direction = 'expense'
+         and t.status = 'completed'
+         and t.occurred_on >= %s and t.occurred_on < %s
+        where ba.user_id = %s and c.is_active = true
+        group by ba.category_id, c.name, ba.percentage
+        order by ba.percentage desc, c.name asc
+        """,
+        (period_start, period_end, user_id),
+    ).fetchall()
+
+    allocations = []
+    total_percentage = Decimal("0.00")
+    for row in allocation_rows:
+        percentage = Decimal(row["percentage"])
+        target_amount = (base_amount * percentage / Decimal("100")).quantize(Decimal("0.01"))
+        actual_amount = as_money(row["actual_amount"])
+        total_percentage += percentage
+        allocations.append(
+            BudgetAllocationRead(
+                category_id=row["category_id"],
+                category_name=row["category_name"],
+                percentage=percentage,
+                target_amount=target_amount,
+                actual_amount=actual_amount,
+                remaining_amount=target_amount - actual_amount,
+            )
+        )
+
+    unallocated_percentage = Decimal("100.00") - total_percentage
+    unallocated_amount = (
+        base_amount * unallocated_percentage / Decimal("100")
+    ).quantize(Decimal("0.01"))
+    return {
+        "month": f"{year:04d}-{month:02d}",
+        "settings": BudgetSettingsRead(**settings_row),
+        "base_amount": base_amount,
+        "total_percentage": total_percentage,
+        "unallocated_percentage": unallocated_percentage,
+        "unallocated_amount": unallocated_amount,
+        "allocations": allocations,
+    }
+
+
+@router.get("/budget", response_model=BudgetSummaryRead)
+def get_budget(
+    year: Annotated[int, Query(ge=2000, le=2100)] | None = None,
+    month: Annotated[int, Query(ge=1, le=12)] | None = None,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    today = date.today()
+    selected_year = year or today.year
+    selected_month = month or today.month
+    with get_connection() as connection:
+        return build_budget_summary(connection, user_id, selected_year, selected_month)
+
+
+@router.patch("/budget/settings", response_model=BudgetSettingsRead)
+def update_budget_settings(
+    payload: BudgetSettingsUpdate,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    try:
+        with get_connection() as connection:
+            if payload.base_mode == BudgetBaseMode.CATEGORY_INCOME:
+                category = connection.execute(
+                    """
+                    select id
+                    from public.categories
+                    where id = %s and user_id = %s and is_active = true
+                      and kind in ('income', 'both')
+                    """,
+                    (payload.income_category_id, user_id),
+                ).fetchone()
+                if not category:
+                    raise HTTPException(status_code=400, detail="Income category not found")
+
+            connection.execute(
+                """
+                insert into public.budget_settings (
+                  user_id, base_mode, income_category_id, manual_amount, updated_at
+                )
+                values (%s, %s, %s, %s, now())
+                on conflict (user_id) do update set
+                  base_mode = excluded.base_mode,
+                  income_category_id = excluded.income_category_id,
+                  manual_amount = excluded.manual_amount,
+                  updated_at = now()
+                """,
+                (
+                    user_id,
+                    payload.base_mode.value,
+                    payload.income_category_id,
+                    payload.manual_amount,
+                ),
+            )
+            return get_budget_settings(connection, user_id)
+    except CheckViolation as error:
+        raise HTTPException(status_code=400, detail="Invalid budget base") from error
+
+
+@router.patch("/budget/allocations/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+def update_budget_allocation(
+    category_id: UUID,
+    payload: BudgetAllocationUpdate,
+    user_id: UUID = Depends(current_user_id),
+) -> Response:
+    try:
+        with get_connection() as connection:
+            category = connection.execute(
+                """
+                select id
+                from public.categories
+                where id = %s and user_id = %s and is_active = true
+                  and kind in ('expense', 'both')
+                """,
+                (category_id, user_id),
+            ).fetchone()
+            if not category:
+                raise HTTPException(status_code=400, detail="Expense category not found")
+
+            other_total = connection.execute(
+                """
+                select coalesce(sum(percentage), 0) as total
+                from public.budget_allocations
+                where user_id = %s and category_id <> %s
+                """,
+                (user_id, category_id),
+            ).fetchone()["total"]
+            if Decimal(other_total) + payload.percentage > Decimal("100"):
+                raise HTTPException(status_code=400, detail="Allocations cannot exceed 100 percent")
+
+            connection.execute(
+                """
+                insert into public.budget_allocations (user_id, category_id, percentage)
+                values (%s, %s, %s)
+                on conflict (user_id, category_id) do update set
+                  percentage = excluded.percentage,
+                  updated_at = now()
+                """,
+                (user_id, category_id, payload.percentage),
+            )
+    except CheckViolation as error:
+        raise HTTPException(status_code=400, detail="Invalid budget allocation") from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/budget/allocations/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_budget_allocation(
+    category_id: UUID,
+    user_id: UUID = Depends(current_user_id),
+) -> Response:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            delete from public.budget_allocations
+            where user_id = %s and category_id = %s
+            """,
+            (user_id, category_id),
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def category_for_commitment(connection, category_id: UUID | None, user_id: UUID) -> str | None:
@@ -1450,6 +1684,40 @@ def dashboard(
             (user_id, current_start, current_end),
         ).fetchall()
 
+        budget_row = connection.execute(
+            """
+            select
+              coalesce(
+                case
+                  when bs.base_mode = 'manual' then bs.manual_amount
+                  else (
+                    select coalesce(sum(t.amount), 0)
+                    from public.transactions t
+                    where t.user_id = bs.user_id
+                      and t.status = 'completed'
+                      and t.direction = 'income'
+                      and t.occurred_on >= %s and t.occurred_on < %s
+                      and (
+                        bs.base_mode = 'total_income'
+                        or (
+                          bs.base_mode = 'category_income'
+                          and t.category_id = bs.income_category_id
+                        )
+                      )
+                  )
+                end,
+                0
+              ) as base_amount,
+              coalesce(sum(ba.percentage), 0) as total_percentage,
+              count(ba.id) as allocation_count
+            from public.budget_settings bs
+            left join public.budget_allocations ba on ba.user_id = bs.user_id
+            where bs.user_id = %s
+            group by bs.user_id, bs.base_mode, bs.manual_amount, bs.income_category_id
+            """,
+            (current_start, current_end, user_id),
+        ).fetchone()
+
         planned_totals = connection.execute(
             """
             select direction, coalesce(sum(amount), 0) as total
@@ -1515,6 +1783,20 @@ def dashboard(
     )
     next_income = planned.get(Direction.INCOME, Decimal("0.00")) + commitment_income
     next_expenses = planned.get(Direction.EXPENSE, Decimal("0.00")) + commitment_expenses
+    budget_overview = None
+    if budget_row:
+        budget_base = as_money(budget_row["base_amount"])
+        budget_percentage = Decimal(budget_row["total_percentage"])
+        budget_unallocated_percentage = Decimal("100.00") - budget_percentage
+        budget_overview = BudgetDashboardRead(
+            base_amount=budget_base,
+            total_percentage=budget_percentage,
+            unallocated_percentage=budget_unallocated_percentage,
+            unallocated_amount=(
+                budget_base * budget_unallocated_percentage / Decimal("100")
+            ).quantize(Decimal("0.01")),
+            allocation_count=budget_row["allocation_count"],
+        )
 
     return {
         "month": f"{selected_year:04d}-{selected_month:02d}",
@@ -1532,6 +1814,7 @@ def dashboard(
         ),
         "next_month_commitments": [CommitmentPreview(**row) for row in commitments],
         "recent_transactions": [TransactionRead(**row) for row in recent],
+        "budget": budget_overview,
     }
 
 

@@ -211,6 +211,7 @@ function Sidebar({ active, accountName, onLogout }) {
         <Link className={active === "dashboard" ? "navItem active" : "navItem"} href="/">Visão geral</Link>
         <Link className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</Link>
         <Link className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejamento</Link>
+        <Link className={active === "budget" ? "navItem active" : "navItem"} href="/distribuicao">Distribuição</Link>
         <Link className={active === "categories" ? "navItem active" : "navItem"} href="/categorias">Categorias</Link>
         <Link className={active === "data" ? "navItem active" : "navItem"} href="/dados">Dados</Link>
         <Link className={active === "settings" ? "navItem active" : "navItem"} href="/configuracoes">Configurações</Link>
@@ -1077,6 +1078,271 @@ function DataView({ session, accountName, onLogout }) {
   );
 }
 
+function BudgetView({ session, accountName, onLogout }) {
+  const [budget, setBudget] = useState(null);
+  const [categories, setCategories] = useState([]);
+  const [baseDraft, setBaseDraft] = useState({ base_mode: "total_income", income_category_id: "", manual_amount: "" });
+  const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const [newPercentage, setNewPercentage] = useState("");
+  const [allocationDrafts, setAllocationDrafts] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [busyAction, setBusyAction] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function loadBudget(showLoading = true) {
+    if (showLoading) setLoading(true);
+    try {
+      const [budgetData, categoryData] = await Promise.all([
+        apiRequest("/api/v1/budget", session),
+        apiRequest("/api/v1/categories", session),
+      ]);
+      setBudget(budgetData);
+      setCategories(categoryData);
+      setBaseDraft({
+        base_mode: budgetData.settings.base_mode,
+        income_category_id: budgetData.settings.income_category_id || "",
+        manual_amount: budgetData.settings.manual_amount || "",
+      });
+      setAllocationDrafts(Object.fromEntries(
+        budgetData.allocations.map((allocation) => [allocation.category_id, String(allocation.percentage)]),
+      ));
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadBudget();
+  }, [session]);
+
+  const incomeCategories = categories.filter((category) => category.kind === "income" || category.kind === "both");
+  const expenseCategories = categories.filter((category) => category.kind === "expense" || category.kind === "both");
+  const allocatedCategoryIds = new Set((budget?.allocations || []).map((allocation) => allocation.category_id));
+  const availableCategories = expenseCategories.filter((category) => !allocatedCategoryIds.has(category.id));
+  const totalPercentage = Number(budget?.total_percentage || 0);
+  const baseAmount = Number(budget?.base_amount || 0);
+  const allocatedAmount = baseAmount * totalPercentage / 100;
+
+  async function saveBase(event) {
+    event.preventDefault();
+    if (baseDraft.base_mode === "category_income" && !baseDraft.income_category_id) {
+      setNotice("Escolha a categoria que representa sua renda-base.");
+      return;
+    }
+    if (baseDraft.base_mode === "manual" && Number(baseDraft.manual_amount) <= 0) {
+      setNotice("Informe um valor mensal maior que zero.");
+      return;
+    }
+
+    const payload = { base_mode: baseDraft.base_mode, income_category_id: null, manual_amount: null };
+    if (baseDraft.base_mode === "category_income") payload.income_category_id = baseDraft.income_category_id;
+    if (baseDraft.base_mode === "manual") payload.manual_amount = baseDraft.manual_amount;
+
+    setBusyAction("base");
+    setNotice("");
+    try {
+      await apiRequest("/api/v1/budget/settings", session, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      await loadBudget(false);
+      setNotice("Base da distribuição atualizada.");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function addAllocation(event) {
+    event.preventDefault();
+    const percentage = Number(newPercentage);
+    if (!selectedCategoryId || percentage <= 0) {
+      setNotice("Escolha uma categoria e informe um percentual maior que zero.");
+      return;
+    }
+    if (totalPercentage + percentage > 100) {
+      setNotice(`Restam apenas ${Math.max(0, 100 - totalPercentage).toLocaleString("pt-BR")}% para distribuir.`);
+      return;
+    }
+
+    setBusyAction("new");
+    setNotice("");
+    try {
+      await apiRequest(`/api/v1/budget/allocations/${selectedCategoryId}`, session, {
+        method: "PATCH",
+        body: JSON.stringify({ percentage }),
+      });
+      setSelectedCategoryId("");
+      setNewPercentage("");
+      await loadBudget(false);
+      setNotice("Categoria incluída na distribuição.");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function saveAllocation(categoryId) {
+    const percentage = Number(allocationDrafts[categoryId]);
+    if (percentage <= 0) {
+      setNotice("O percentual precisa ser maior que zero.");
+      return;
+    }
+
+    setBusyAction(categoryId);
+    setNotice("");
+    try {
+      await apiRequest(`/api/v1/budget/allocations/${categoryId}`, session, {
+        method: "PATCH",
+        body: JSON.stringify({ percentage }),
+      });
+      await loadBudget(false);
+      setNotice("Percentual atualizado.");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function removeAllocation(categoryId) {
+    setBusyAction(categoryId);
+    setNotice("");
+    try {
+      await apiRequest(`/api/v1/budget/allocations/${categoryId}`, session, { method: "DELETE" });
+      await loadBudget(false);
+      setNotice("Categoria removida da distribuição.");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  return (
+    <main className="shell">
+      <Sidebar active="budget" accountName={accountName} onLogout={onLogout} />
+      <section className="content budgetContent">
+        <header className="topbar">
+          <div><p className="eyebrow">DISTRIBUIÇÃO</p><h1>Dê um destino para cada parte.</h1></div>
+          <Link className="backLink" href="/">← Visão geral</Link>
+        </header>
+
+        <div className="budgetLayout">
+          <div className="budgetMain">
+            <section className="budgetIntro">
+              <p className="eyebrow">BASE DO CÁLCULO</p>
+              <h2>Comece pelo dinheiro que sustenta o mês.</h2>
+              <p>Use todas as receitas, uma categoria como Salário ou um valor fixo. A distribuição cria referências; ela não movimenta dinheiro nem altera seu saldo.</p>
+            </section>
+
+            <form className="budgetBaseForm" onSubmit={saveBase}>
+              <label className="budgetField">
+                <span>Calcular sobre</span>
+                <select value={baseDraft.base_mode} onChange={(event) => setBaseDraft((current) => ({ ...current, base_mode: event.target.value, income_category_id: "", manual_amount: "" }))}>
+                  <option value="total_income">Todas as receitas recebidas no mês</option>
+                  <option value="category_income">Uma categoria de recebimento</option>
+                  <option value="manual">Um valor mensal definido</option>
+                </select>
+              </label>
+              {baseDraft.base_mode === "category_income" && (
+                <label className="budgetField">
+                  <span>Categoria da renda</span>
+                  <select value={baseDraft.income_category_id} onChange={(event) => setBaseDraft((current) => ({ ...current, income_category_id: event.target.value }))}>
+                    <option value="">Escolha uma categoria</option>
+                    {incomeCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  </select>
+                </label>
+              )}
+              {baseDraft.base_mode === "manual" && (
+                <label className="budgetField">
+                  <span>Valor mensal</span>
+                  <input type="number" min="0.01" step="0.01" value={baseDraft.manual_amount} onChange={(event) => setBaseDraft((current) => ({ ...current, manual_amount: event.target.value }))} placeholder="0,00" />
+                </label>
+              )}
+              <button className="secondaryButton" type="submit" disabled={busyAction === "base"}>{busyAction === "base" ? "Salvando..." : "Salvar base"}</button>
+            </form>
+
+            <section className="allocationSection" aria-labelledby="allocation-title">
+              <div className="sectionHeader">
+                <div><p className="eyebrow">FRAÇÕES</p><h2 id="allocation-title">Como você quer dividir.</h2></div>
+                <span className="seeAll">{loading ? "Carregando" : `${totalPercentage.toLocaleString("pt-BR")}% de 100%`}</span>
+              </div>
+
+              <form className="allocationCreate" onSubmit={addAllocation}>
+                <label className="budgetField">
+                  <span>Categoria</span>
+                  <select value={selectedCategoryId} onChange={(event) => setSelectedCategoryId(event.target.value)}>
+                    <option value="">Escolha uma categoria de gasto</option>
+                    {availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  </select>
+                </label>
+                <label className="budgetField percentageField">
+                  <span>Percentual</span>
+                  <div><input type="number" min="0.01" max="100" step="0.01" value={newPercentage} onChange={(event) => setNewPercentage(event.target.value)} placeholder="0" /><b>%</b></div>
+                </label>
+                <button className="confirmButton" type="submit" disabled={busyAction === "new" || availableCategories.length === 0}>{busyAction === "new" ? "Adicionando..." : "Adicionar fração"}</button>
+              </form>
+
+              {notice && <p className="notice" role="status">{notice}</p>}
+
+              <div className="allocationList">
+                {!loading && budget?.allocations.length === 0 ? (
+                  <p className="emptyState">Nenhuma fração definida. Crie categorias como Investimentos, Assinaturas ou Lazer e escolha quanto cada uma recebe.</p>
+                ) : budget?.allocations.map((allocation) => {
+                  const used = Number(allocation.target_amount) > 0
+                    ? Math.min(100, Math.round(Number(allocation.actual_amount) / Number(allocation.target_amount) * 100))
+                    : 0;
+                  const exceeded = Number(allocation.remaining_amount) < 0;
+                  return (
+                    <article className="allocationRow" key={allocation.category_id}>
+                      <div className="allocationIdentity">
+                        <span className="allocationDot" />
+                        <div><strong>{allocation.category_name}</strong><span>{formatCurrency(allocation.actual_amount)} utilizados de {formatCurrency(allocation.target_amount)}</span></div>
+                      </div>
+                      <label className="allocationPercentage" aria-label={`Percentual para ${allocation.category_name}`}>
+                        <input type="number" min="0.01" max="100" step="0.01" value={allocationDrafts[allocation.category_id] ?? ""} onChange={(event) => setAllocationDrafts((current) => ({ ...current, [allocation.category_id]: event.target.value }))} />
+                        <span>%</span>
+                      </label>
+                      <div className="allocationAmounts">
+                        <span>{exceeded ? "Acima da meta" : "Ainda disponível"}</span>
+                        <b className={exceeded ? "invalidText" : "validText"}>{formatCurrency(Math.abs(Number(allocation.remaining_amount)))}</b>
+                      </div>
+                      <div className="rowActions allocationActions">
+                        <button type="button" onClick={() => saveAllocation(allocation.category_id)} disabled={busyAction === allocation.category_id}>Salvar</button>
+                        <button type="button" onClick={() => removeAllocation(allocation.category_id)} disabled={busyAction === allocation.category_id}>Remover</button>
+                      </div>
+                      <div className="allocationTrack" aria-label={`${used}% da fração utilizada`}><span className={exceeded ? "exceeded" : ""} style={{ width: `${used}%` }} /></div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
+
+          <aside className="budgetSummary" aria-labelledby="budget-summary-title">
+            <p className="eyebrow">{formatMonth(budget?.month)}</p>
+            <h2 id="budget-summary-title">Seu mapa do mês.</h2>
+            <strong className="budgetBaseValue">{formatCurrency(budget?.base_amount)}</strong>
+            <span className="budgetBaseLabel">base considerada</span>
+            <div className="distributionMeter" aria-label={`${totalPercentage}% distribuído`}><span style={{ width: `${Math.min(100, totalPercentage)}%` }} /></div>
+            <div className="summaryRows">
+              <div><span>Distribuído</span><b>{formatCurrency(allocatedAmount)}</b></div>
+              <div><span>Sem destino</span><b>{formatCurrency(budget?.unallocated_amount)}</b></div>
+              <div><span>Percentual livre</span><b>{Number(budget?.unallocated_percentage || 100).toLocaleString("pt-BR")}%</b></div>
+            </div>
+            <Link className="asideLink" href="/categorias">Gerenciar categorias <span>→</span></Link>
+          </aside>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function PlanningView({ session, accountName, onLogout }) {
   const [commitments, setCommitments] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -1698,6 +1964,10 @@ export default function Home({ view = "dashboard" }) {
     return <PlanningView session={session} accountName={accountName} onLogout={handleLogout} />;
   }
 
+  if (view === "budget") {
+    return <BudgetView session={session} accountName={accountName} onLogout={handleLogout} />;
+  }
+
   if (view === "settings") {
     return <SettingsView session={session} accountName={accountName} onLogout={handleLogout} />;
   }
@@ -1742,6 +2012,15 @@ export default function Home({ view = "dashboard" }) {
                 <div><span>Saiu</span><b>{formatCurrency(current.expenses)}</b></div>
               </div>
               <Progress value={currentUsed} label={`${currentUsed}% utilizado`} detail="movimentações concluídas" />
+              {dashboard?.budget ? (
+                <div className="budgetDashboardPreview">
+                  <div><span>Distribuição</span><Link href="/distribuicao">ajustar</Link></div>
+                  <p><strong>{Number(dashboard.budget.total_percentage).toLocaleString("pt-BR")}%</strong> destinado em {dashboard.budget.allocation_count} categorias</p>
+                  <small>{formatCurrency(dashboard.budget.unallocated_amount)} ainda sem destino</small>
+                </div>
+              ) : (
+                <p className="commitmentEmpty">Sua renda ainda não foi dividida. <Link href="/distribuicao">Distribuir</Link></p>
+              )}
             </article>
 
             <div className="comparisonRail" aria-hidden="true"><span>→</span></div>
