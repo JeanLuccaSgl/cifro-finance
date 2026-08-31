@@ -795,6 +795,72 @@ def get_budget_settings(connection, user_id: UUID) -> dict:
     ).fetchone()
 
 
+def get_budget_month(
+    connection,
+    user_id: UUID,
+    year: int,
+    month: int,
+) -> dict:
+    month_date = date(year, month, 1)
+    get_budget_settings(connection, user_id)
+    connection.execute(
+        "select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s::text, 0))",
+        (f"budget-month:{user_id}:{month_date.isoformat()}",),
+    )
+    row = connection.execute(
+        """
+        select
+          bm.id, bm.base_mode, bm.income_category_id, bm.manual_amount,
+          bm.created_at, bm.updated_at, c.name as income_category_name
+        from public.budget_months bm
+        left join public.categories c
+          on c.id = bm.income_category_id and c.user_id = bm.user_id
+        where bm.user_id = %s and bm.month = %s
+        """,
+        (user_id, month_date),
+    ).fetchone()
+    if row:
+        return row
+
+    row = connection.execute(
+        """
+        insert into public.budget_months (
+          user_id, month, base_mode, income_category_id, manual_amount
+        )
+        select user_id, %s, base_mode, income_category_id, manual_amount
+        from public.budget_settings
+        where user_id = %s
+        returning id
+        """,
+        (month_date, user_id),
+    ).fetchone()
+    connection.execute(
+        """
+        insert into public.budget_month_allocations (
+          budget_month_id, user_id, category_id,
+          allocation_mode, percentage, fixed_amount
+        )
+        select %s, user_id, category_id,
+          allocation_mode, percentage, fixed_amount
+        from public.budget_allocations
+        where user_id = %s
+        """,
+        (row["id"], user_id),
+    )
+    return connection.execute(
+        """
+        select
+          bm.id, bm.base_mode, bm.income_category_id, bm.manual_amount,
+          bm.created_at, bm.updated_at, c.name as income_category_name
+        from public.budget_months bm
+        left join public.categories c
+          on c.id = bm.income_category_id and c.user_id = bm.user_id
+        where bm.id = %s and bm.user_id = %s
+        """,
+        (row["id"], user_id),
+    ).fetchone()
+
+
 def budget_base_amount(
     connection,
     user_id: UUID,
@@ -843,7 +909,7 @@ def budget_base_amount(
 
 def build_budget_summary(connection, user_id: UUID, year: int, month: int) -> dict:
     period_start, period_end = month_bounds(year, month)
-    settings_row = get_budget_settings(connection, user_id)
+    settings_row = get_budget_month(connection, user_id, year, month)
     base_amount = budget_base_amount(connection, user_id, year, month, settings_row)
 
     allocation_rows = connection.execute(
@@ -852,7 +918,7 @@ def build_budget_summary(connection, user_id: UUID, year: int, month: int) -> di
           ba.category_id, c.name as category_name, ba.allocation_mode,
           ba.percentage, ba.fixed_amount,
           coalesce(sum(t.amount), 0) as actual_amount
-        from public.budget_allocations ba
+        from public.budget_month_allocations ba
         join public.categories c
           on c.id = ba.category_id and c.user_id = ba.user_id
         left join public.transactions t
@@ -861,13 +927,13 @@ def build_budget_summary(connection, user_id: UUID, year: int, month: int) -> di
          and t.direction = 'expense'
          and t.status = 'completed'
          and t.occurred_on >= %s and t.occurred_on < %s
-        where ba.user_id = %s and c.is_active = true
+        where ba.user_id = %s and ba.budget_month_id = %s and c.is_active = true
         group by
           ba.category_id, c.name, ba.allocation_mode,
           ba.percentage, ba.fixed_amount
         order by c.name asc
         """,
-        (period_start, period_end, user_id),
+        (period_start, period_end, user_id, settings_row["id"]),
     ).fetchall()
 
     allocations = []
@@ -934,8 +1000,13 @@ def get_budget(
 @router.patch("/budget/settings", response_model=BudgetSettingsRead)
 def update_budget_settings(
     payload: BudgetSettingsUpdate,
+    year: Annotated[int, Query(ge=2000, le=2100)] | None = None,
+    month: Annotated[int, Query(ge=1, le=12)] | None = None,
     user_id: UUID = Depends(current_user_id),
 ) -> dict:
+    today = date.today()
+    selected_year = year or today.year
+    selected_month = month or today.month
     try:
         with get_connection() as connection:
             if payload.base_mode == BudgetBaseMode.CATEGORY_INCOME:
@@ -951,36 +1022,102 @@ def update_budget_settings(
                 if not category:
                     raise HTTPException(status_code=400, detail="Income category not found")
 
+            budget_month = get_budget_month(
+                connection,
+                user_id,
+                selected_year,
+                selected_month,
+            )
             connection.execute(
                 """
-                insert into public.budget_settings (
-                  user_id, base_mode, income_category_id, manual_amount, updated_at
-                )
-                values (%s, %s, %s, %s, now())
-                on conflict (user_id) do update set
-                  base_mode = excluded.base_mode,
-                  income_category_id = excluded.income_category_id,
-                  manual_amount = excluded.manual_amount,
-                  updated_at = now()
+                update public.budget_months
+                set base_mode = %s,
+                    income_category_id = %s,
+                    manual_amount = %s,
+                    updated_at = now()
+                where id = %s and user_id = %s
                 """,
                 (
-                    user_id,
                     payload.base_mode.value,
                     payload.income_category_id,
                     payload.manual_amount,
+                    budget_month["id"],
+                    user_id,
                 ),
             )
-            return get_budget_settings(connection, user_id)
+            return get_budget_month(connection, user_id, selected_year, selected_month)
     except CheckViolation as error:
         raise HTTPException(status_code=400, detail="Invalid budget base") from error
+
+
+@router.post("/budget/template", status_code=status.HTTP_204_NO_CONTENT)
+def update_budget_template(
+    year: Annotated[int, Query(ge=2000, le=2100)] | None = None,
+    month: Annotated[int, Query(ge=1, le=12)] | None = None,
+    user_id: UUID = Depends(current_user_id),
+) -> Response:
+    today = date.today()
+    selected_year = year or today.year
+    selected_month = month or today.month
+    with get_connection() as connection:
+        connection.execute(
+            "select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s::text, 0))",
+            (user_id,),
+        )
+        budget_month = get_budget_month(
+            connection,
+            user_id,
+            selected_year,
+            selected_month,
+        )
+        connection.execute(
+            """
+            insert into public.budget_settings (
+              user_id, base_mode, income_category_id, manual_amount, updated_at
+            )
+            values (%s, %s, %s, %s, now())
+            on conflict (user_id) do update set
+              base_mode = excluded.base_mode,
+              income_category_id = excluded.income_category_id,
+              manual_amount = excluded.manual_amount,
+              updated_at = now()
+            """,
+            (
+                user_id,
+                budget_month["base_mode"],
+                budget_month["income_category_id"],
+                budget_month["manual_amount"],
+            ),
+        )
+        connection.execute(
+            "delete from public.budget_allocations where user_id = %s",
+            (user_id,),
+        )
+        connection.execute(
+            """
+            insert into public.budget_allocations (
+              user_id, category_id, allocation_mode, percentage, fixed_amount
+            )
+            select user_id, category_id, allocation_mode, percentage, fixed_amount
+            from public.budget_month_allocations
+            where budget_month_id = %s and user_id = %s
+            """,
+            (budget_month["id"], user_id),
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/budget/allocations/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 def update_budget_allocation(
     category_id: UUID,
     payload: BudgetAllocationUpdate,
+    year: Annotated[int, Query(ge=2000, le=2100)] | None = None,
+    month: Annotated[int, Query(ge=1, le=12)] | None = None,
     user_id: UUID = Depends(current_user_id),
 ) -> Response:
+    today = date.today()
+    selected_year = year or today.year
+    selected_month = month or today.month
     try:
         with get_connection() as connection:
             category = connection.execute(
@@ -999,8 +1136,18 @@ def update_budget_allocation(
                 "select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s::text, 0))",
                 (user_id,),
             )
-            today = date.today()
-            summary = build_budget_summary(connection, user_id, today.year, today.month)
+            budget_month = get_budget_month(
+                connection,
+                user_id,
+                selected_year,
+                selected_month,
+            )
+            summary = build_budget_summary(
+                connection,
+                user_id,
+                selected_year,
+                selected_month,
+            )
             other_total = sum(
                 (
                     allocation.target_amount
@@ -1024,17 +1171,19 @@ def update_budget_allocation(
 
             connection.execute(
                 """
-                insert into public.budget_allocations (
-                  user_id, category_id, allocation_mode, percentage, fixed_amount
+                insert into public.budget_month_allocations (
+                  budget_month_id, user_id, category_id,
+                  allocation_mode, percentage, fixed_amount
                 )
-                values (%s, %s, %s, %s, %s)
-                on conflict (user_id, category_id) do update set
+                values (%s, %s, %s, %s, %s, %s)
+                on conflict (budget_month_id, category_id) do update set
                   allocation_mode = excluded.allocation_mode,
                   percentage = excluded.percentage,
                   fixed_amount = excluded.fixed_amount,
                   updated_at = now()
                 """,
                 (
+                    budget_month["id"],
                     user_id,
                     category_id,
                     payload.allocation_mode.value,
@@ -1050,15 +1199,26 @@ def update_budget_allocation(
 @router.delete("/budget/allocations/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_budget_allocation(
     category_id: UUID,
+    year: Annotated[int, Query(ge=2000, le=2100)] | None = None,
+    month: Annotated[int, Query(ge=1, le=12)] | None = None,
     user_id: UUID = Depends(current_user_id),
 ) -> Response:
+    today = date.today()
+    selected_year = year or today.year
+    selected_month = month or today.month
     with get_connection() as connection:
+        budget_month = get_budget_month(
+            connection,
+            user_id,
+            selected_year,
+            selected_month,
+        )
         connection.execute(
             """
-            delete from public.budget_allocations
-            where user_id = %s and category_id = %s
+            delete from public.budget_month_allocations
+            where budget_month_id = %s and user_id = %s and category_id = %s
             """,
-            (user_id, category_id),
+            (budget_month["id"], user_id, category_id),
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

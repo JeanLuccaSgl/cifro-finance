@@ -236,6 +236,13 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .summaryRows div { display: flex; justify-content: space-between; padding: 13px 0; border-bottom: 1px solid var(--line-soft); color: #8994aa; font-size: 10px; }
 .summaryRows b { color: var(--ink); font-family: 'DM Mono', monospace; font-weight: 500; }
 .budgetContent { max-width: 1320px; }
+.budgetPeriodNav { display: grid; grid-template-columns: 38px auto 38px minmax(180px, 1fr); align-items: center; gap: 12px; padding: 17px 0; border-bottom: 1px solid var(--line); }
+.budgetPeriodNav button { width: 38px; height: 38px; border: 1px solid #293650; border-radius: 4px; color: #aebdff; background: #0d1529; cursor: pointer; transition: border-color .16s ease, background .16s ease; }
+.budgetPeriodNav button:hover, .budgetPeriodNav button:focus-visible { border-color: var(--blue-bright); background: rgba(118, 149, 255, .09); outline: 0; }
+.budgetPeriodNav div { display: grid; gap: 4px; min-width: 180px; }
+.budgetPeriodNav div span { color: #68758f; font-family: 'DM Mono', monospace; font-size: 8px; letter-spacing: 1.1px; }
+.budgetPeriodNav div strong { color: var(--ink); font-size: 15px; font-weight: 600; text-transform: capitalize; }
+.budgetPeriodNav p { justify-self: end; margin: 0; color: #738099; font-size: 10px; }
 .budgetLayout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 76px; align-items: start; }
 .budgetMain { min-width: 0; }
 .budgetIntro { max-width: 650px; padding: 70px 0 28px; }
@@ -290,6 +297,10 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .distributionMeter { height: 5px; margin: 25px 0 18px; overflow: hidden; background: #202b42; }
 .distributionMeter span { display: block; height: 100%; background: var(--blue-bright); transition: width .2s ease; }
 .budgetSummary .asideLink { margin-top: 22px; }
+.budgetTemplateAction { margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--line); }
+.budgetTemplateAction > span { color: #71809d; font-family: 'DM Mono', monospace; font-size: 8px; letter-spacing: .9px; }
+.budgetTemplateAction p { margin: 10px 0 14px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.budgetTemplateAction .secondaryButton { width: 100%; min-height: 38px; padding: 0 12px; font-size: 9px; }
 .planningContent { max-width: 1320px; }
 .planningIntro { max-width: 610px; padding: 70px 0 28px; }
 .planningIntro h2 { max-width: 570px; margin-bottom: 13px; font-size: clamp(25px, 4vw, 38px); letter-spacing: -1.5px; line-height: 1.12; }
@@ -461,7 +472,7 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
   .quickCategories, .categorySummary, .planningSummary, .settingsSummary, .budgetSummary { padding-left: 20px; }
   .budgetBaseForm { grid-template-columns: 1fr 1fr; }
   .budgetBaseForm .secondaryButton { width: max-content; }
-  .allocationRow { grid-template-columns: minmax(160px, 1fr) 72px 120px; }
+  .allocationRow { grid-template-columns: minmax(160px, 1fr) 180px 120px; }
   .allocationActions { grid-column: 1 / -1; justify-content: flex-end; }
 }
 
@@ -514,6 +525,9 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
   .settingsActions .confirmButton { width: 100%; }
   .settingsWarning { margin-left: 0; }
   .budgetIntro { padding-top: 45px; }
+  .budgetPeriodNav { grid-template-columns: 38px minmax(0, 1fr) 38px; gap: 9px; }
+  .budgetPeriodNav div { min-width: 0; text-align: center; }
+  .budgetPeriodNav p { grid-column: 1 / -1; justify-self: center; }
   .budgetBaseForm, .allocationCreate { display: block; }
   .budgetBaseForm .budgetField, .allocationCreate .budgetField { margin-bottom: 13px; }
   .budgetBaseForm .secondaryButton, .allocationCreate .confirmButton { width: 100%; }

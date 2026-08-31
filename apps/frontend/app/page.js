@@ -22,6 +22,21 @@ function formatMonth(value) {
     .toUpperCase();
 }
 
+function formatMonthYear(year, month) {
+  return new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" })
+    .format(new Date(year, month - 1, 1));
+}
+
+function currentPeriod() {
+  const now = new Date();
+  return { year: now.getFullYear(), month: now.getMonth() + 1 };
+}
+
+function shiftPeriod(period, offset) {
+  const shifted = new Date(period.year, period.month - 1 + offset, 1);
+  return { year: shifted.getFullYear(), month: shifted.getMonth() + 1 };
+}
+
 function formatDate(value) {
   if (!value) return "sem data";
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" })
@@ -1085,6 +1100,7 @@ function BudgetView({ session, accountName, onLogout }) {
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
   const [newAllocation, setNewAllocation] = useState({ mode: "fixed_amount", value: "" });
   const [allocationDrafts, setAllocationDrafts] = useState({});
+  const [selectedPeriod, setSelectedPeriod] = useState(currentPeriod);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState("");
   const [notice, setNotice] = useState("");
@@ -1093,7 +1109,7 @@ function BudgetView({ session, accountName, onLogout }) {
     if (showLoading) setLoading(true);
     try {
       const [budgetData, categoryData] = await Promise.all([
-        apiRequest("/api/v1/budget", session),
+        apiRequest(`/api/v1/budget?year=${selectedPeriod.year}&month=${selectedPeriod.month}`, session),
         apiRequest("/api/v1/categories", session),
       ]);
       setBudget(budgetData);
@@ -1118,7 +1134,7 @@ function BudgetView({ session, accountName, onLogout }) {
 
   useEffect(() => {
     loadBudget();
-  }, [session]);
+  }, [session, selectedPeriod.year, selectedPeriod.month]);
 
   const incomeCategories = categories.filter((category) => category.kind === "income" || category.kind === "both");
   const expenseCategories = categories.filter((category) => category.kind === "expense" || category.kind === "both");
@@ -1127,6 +1143,7 @@ function BudgetView({ session, accountName, onLogout }) {
   const totalPercentage = Number(budget?.total_percentage || 0);
   const baseAmount = Number(budget?.base_amount || 0);
   const allocatedAmount = Number(budget?.allocated_amount || 0);
+  const periodQuery = `?year=${selectedPeriod.year}&month=${selectedPeriod.month}`;
 
   function allocationPreview(mode, value) {
     const numericValue = Math.max(0, Number(value) || 0);
@@ -1169,7 +1186,7 @@ function BudgetView({ session, accountName, onLogout }) {
     setBusyAction("base");
     setNotice("");
     try {
-      await apiRequest("/api/v1/budget/settings", session, {
+      await apiRequest(`/api/v1/budget/settings${periodQuery}`, session, {
         method: "PATCH",
         body: JSON.stringify(payload),
       });
@@ -1201,7 +1218,7 @@ function BudgetView({ session, accountName, onLogout }) {
     setBusyAction("new");
     setNotice("");
     try {
-      await apiRequest(`/api/v1/budget/allocations/${selectedCategoryId}`, session, {
+      await apiRequest(`/api/v1/budget/allocations/${selectedCategoryId}${periodQuery}`, session, {
         method: "PATCH",
         body: JSON.stringify(allocationPayload(newAllocation)),
       });
@@ -1231,7 +1248,7 @@ function BudgetView({ session, accountName, onLogout }) {
     setBusyAction(categoryId);
     setNotice("");
     try {
-      await apiRequest(`/api/v1/budget/allocations/${categoryId}`, session, {
+      await apiRequest(`/api/v1/budget/allocations/${categoryId}${periodQuery}`, session, {
         method: "PATCH",
         body: JSON.stringify(allocationPayload(draft)),
       });
@@ -1248,7 +1265,7 @@ function BudgetView({ session, accountName, onLogout }) {
     setBusyAction(categoryId);
     setNotice("");
     try {
-      await apiRequest(`/api/v1/budget/allocations/${categoryId}`, session, { method: "DELETE" });
+      await apiRequest(`/api/v1/budget/allocations/${categoryId}${periodQuery}`, session, { method: "DELETE" });
       await loadBudget(false);
       setNotice("Categoria removida da distribuição.");
     } catch (error) {
@@ -1256,6 +1273,26 @@ function BudgetView({ session, accountName, onLogout }) {
     } finally {
       setBusyAction("");
     }
+  }
+
+  async function saveAsTemplate() {
+    setBusyAction("template");
+    setNotice("");
+    try {
+      await apiRequest(`/api/v1/budget/template${periodQuery}`, session, { method: "POST" });
+      setNotice(`${formatMonthYear(selectedPeriod.year, selectedPeriod.month)} agora é o modelo dos próximos meses.`);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  function movePeriod(offset) {
+    const next = shiftPeriod(selectedPeriod, offset);
+    if (next.year < 2000 || next.year > 2100) return;
+    setNotice("");
+    setSelectedPeriod(next);
   }
 
   return (
@@ -1266,6 +1303,16 @@ function BudgetView({ session, accountName, onLogout }) {
           <div><p className="eyebrow">DISTRIBUIÇÃO</p><h1>Dê um destino para cada parte.</h1></div>
           <Link className="backLink" href="/">← Visão geral</Link>
         </header>
+
+        <nav className="budgetPeriodNav" aria-label="Mês da distribuição">
+          <button type="button" onClick={() => movePeriod(-1)} aria-label="Mês anterior">←</button>
+          <div>
+            <span>ORÇAMENTO DO MÊS</span>
+            <strong>{formatMonthYear(selectedPeriod.year, selectedPeriod.month)}</strong>
+          </div>
+          <button type="button" onClick={() => movePeriod(1)} aria-label="Próximo mês">→</button>
+          <p>Cada mês guarda sua própria distribuição.</p>
+        </nav>
 
         <div className="budgetLayout">
           <div className="budgetMain">
@@ -1431,6 +1478,13 @@ function BudgetView({ session, accountName, onLogout }) {
               <div><span>Distribuído</span><b>{formatCurrency(allocatedAmount)}</b></div>
               <div><span>{Number(budget?.unallocated_amount || 0) < 0 ? "Acima da base" : "Sem destino"}</span><b>{formatCurrency(Math.abs(Number(budget?.unallocated_amount || 0)))}</b></div>
               <div><span>{Number(budget?.unallocated_percentage || 0) < 0 ? "Percentual excedido" : "Percentual livre"}</span><b>{Math.abs(Number(budget?.unallocated_percentage ?? 100)).toLocaleString("pt-BR")}%</b></div>
+            </div>
+            <div className="budgetTemplateAction">
+              <span>MODELO DOS PRÓXIMOS MESES</span>
+              <p>Copie a base e as frações deste mês para os meses que ainda não foram abertos.</p>
+              <button className="secondaryButton" type="button" onClick={saveAsTemplate} disabled={busyAction === "template" || loading}>
+                {busyAction === "template" ? "Salvando modelo..." : "Usar este mês como padrão"}
+              </button>
             </div>
             <Link className="asideLink" href="/categorias">Gerenciar categorias <span>→</span></Link>
           </aside>
