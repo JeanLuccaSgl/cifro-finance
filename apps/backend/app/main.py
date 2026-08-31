@@ -17,6 +17,7 @@ from openpyxl import load_workbook
 from .config import settings
 from .db import get_connection
 from .schemas import (
+    BudgetAllocationMode,
     BudgetAllocationRead,
     BudgetAllocationUpdate,
     BudgetBaseMode,
@@ -794,36 +795,62 @@ def get_budget_settings(connection, user_id: UUID) -> dict:
     ).fetchone()
 
 
-def build_budget_summary(connection, user_id: UUID, year: int, month: int) -> dict:
-    period_start, period_end = month_bounds(year, month)
-    settings_row = get_budget_settings(connection, user_id)
-
+def budget_base_amount(
+    connection,
+    user_id: UUID,
+    year: int,
+    month: int,
+    settings_row: dict,
+) -> Decimal:
     if settings_row["base_mode"] == BudgetBaseMode.MANUAL:
-        base_amount = as_money(settings_row["manual_amount"])
-    else:
-        category_filter = ""
-        parameters: list[object] = [user_id, period_start, period_end]
-        if settings_row["base_mode"] == BudgetBaseMode.CATEGORY_INCOME:
-            category_filter = "and category_id = %s"
-            parameters.append(settings_row["income_category_id"])
-        base_row = connection.execute(
-            f"""
+        return as_money(settings_row["manual_amount"])
+
+    period_start, period_end = month_bounds(year, month)
+    if settings_row["base_mode"] == BudgetBaseMode.TOTAL_INCOME:
+        row = connection.execute(
+            """
             select coalesce(sum(amount), 0) as total
             from public.transactions
             where user_id = %s
               and status = 'completed'
               and direction = 'income'
               and occurred_on >= %s and occurred_on < %s
-              {category_filter}
             """,
-            tuple(parameters),
+            (user_id, period_start, period_end),
         ).fetchone()
-        base_amount = as_money(base_row["total"])
+        return as_money(row["total"])
+
+    commitment_rows = connection.execute(
+        f"""
+        select {COMMITMENT_COLUMNS}
+        from public.commitments c
+        where c.user_id = %s
+          and c.category_id = %s
+          and c.direction = 'income'
+          and c.is_active = true
+        """,
+        (user_id, settings_row["income_category_id"]),
+    ).fetchall()
+    return as_money(sum(
+        (
+            row["amount"]
+            for row in commitment_rows
+            if projected_commitment_date(row, year, month) is not None
+        ),
+        Decimal("0.00"),
+    ))
+
+
+def build_budget_summary(connection, user_id: UUID, year: int, month: int) -> dict:
+    period_start, period_end = month_bounds(year, month)
+    settings_row = get_budget_settings(connection, user_id)
+    base_amount = budget_base_amount(connection, user_id, year, month, settings_row)
 
     allocation_rows = connection.execute(
         """
         select
-          ba.category_id, c.name as category_name, ba.percentage,
+          ba.category_id, c.name as category_name, ba.allocation_mode,
+          ba.percentage, ba.fixed_amount,
           coalesce(sum(t.amount), 0) as actual_amount
         from public.budget_allocations ba
         join public.categories c
@@ -835,38 +862,55 @@ def build_budget_summary(connection, user_id: UUID, year: int, month: int) -> di
          and t.status = 'completed'
          and t.occurred_on >= %s and t.occurred_on < %s
         where ba.user_id = %s and c.is_active = true
-        group by ba.category_id, c.name, ba.percentage
-        order by ba.percentage desc, c.name asc
+        group by
+          ba.category_id, c.name, ba.allocation_mode,
+          ba.percentage, ba.fixed_amount
+        order by c.name asc
         """,
         (period_start, period_end, user_id),
     ).fetchall()
 
     allocations = []
-    total_percentage = Decimal("0.00")
+    allocated_amount = Decimal("0.00")
     for row in allocation_rows:
-        percentage = Decimal(row["percentage"])
-        target_amount = (base_amount * percentage / Decimal("100")).quantize(Decimal("0.01"))
+        if row["allocation_mode"] == BudgetAllocationMode.FIXED_AMOUNT:
+            fixed_amount = as_money(row["fixed_amount"])
+            target_amount = fixed_amount
+            percentage = (
+                target_amount * Decimal("100") / base_amount
+            ).quantize(Decimal("0.01")) if base_amount > 0 else Decimal("0.00")
+        else:
+            fixed_amount = None
+            percentage = Decimal(row["percentage"])
+            target_amount = (
+                base_amount * percentage / Decimal("100")
+            ).quantize(Decimal("0.01"))
         actual_amount = as_money(row["actual_amount"])
-        total_percentage += percentage
+        allocated_amount += target_amount
         allocations.append(
             BudgetAllocationRead(
                 category_id=row["category_id"],
                 category_name=row["category_name"],
+                allocation_mode=row["allocation_mode"],
                 percentage=percentage,
+                fixed_amount=fixed_amount,
                 target_amount=target_amount,
                 actual_amount=actual_amount,
                 remaining_amount=target_amount - actual_amount,
             )
         )
 
+    allocations.sort(key=lambda allocation: (-allocation.target_amount, allocation.category_name.lower()))
+    total_percentage = (
+        allocated_amount * Decimal("100") / base_amount
+    ).quantize(Decimal("0.01")) if base_amount > 0 else Decimal("0.00")
     unallocated_percentage = Decimal("100.00") - total_percentage
-    unallocated_amount = (
-        base_amount * unallocated_percentage / Decimal("100")
-    ).quantize(Decimal("0.01"))
+    unallocated_amount = base_amount - allocated_amount
     return {
         "month": f"{year:04d}-{month:02d}",
         "settings": BudgetSettingsRead(**settings_row),
         "base_amount": base_amount,
+        "allocated_amount": allocated_amount,
         "total_percentage": total_percentage,
         "unallocated_percentage": unallocated_percentage,
         "unallocated_amount": unallocated_amount,
@@ -951,26 +995,52 @@ def update_budget_allocation(
             if not category:
                 raise HTTPException(status_code=400, detail="Expense category not found")
 
-            other_total = connection.execute(
-                """
-                select coalesce(sum(percentage), 0) as total
-                from public.budget_allocations
-                where user_id = %s and category_id <> %s
-                """,
-                (user_id, category_id),
-            ).fetchone()["total"]
-            if Decimal(other_total) + payload.percentage > Decimal("100"):
-                raise HTTPException(status_code=400, detail="Allocations cannot exceed 100 percent")
+            connection.execute(
+                "select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s::text, 0))",
+                (user_id,),
+            )
+            today = date.today()
+            summary = build_budget_summary(connection, user_id, today.year, today.month)
+            other_total = sum(
+                (
+                    allocation.target_amount
+                    for allocation in summary["allocations"]
+                    if allocation.category_id != category_id
+                ),
+                Decimal("0.00"),
+            )
+            if payload.allocation_mode == BudgetAllocationMode.FIXED_AMOUNT:
+                target_amount = as_money(payload.fixed_amount)
+            else:
+                target_amount = (
+                    summary["base_amount"] * payload.percentage / Decimal("100")
+                ).quantize(Decimal("0.01"))
+            if summary["base_amount"] > 0 and other_total + target_amount > summary["base_amount"]:
+                available = max(Decimal("0.00"), summary["base_amount"] - other_total)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Restam apenas R$ {available:.2f} na base da distribuição",
+                )
 
             connection.execute(
                 """
-                insert into public.budget_allocations (user_id, category_id, percentage)
-                values (%s, %s, %s)
+                insert into public.budget_allocations (
+                  user_id, category_id, allocation_mode, percentage, fixed_amount
+                )
+                values (%s, %s, %s, %s, %s)
                 on conflict (user_id, category_id) do update set
+                  allocation_mode = excluded.allocation_mode,
                   percentage = excluded.percentage,
+                  fixed_amount = excluded.fixed_amount,
                   updated_at = now()
                 """,
-                (user_id, category_id, payload.percentage),
+                (
+                    user_id,
+                    category_id,
+                    payload.allocation_mode.value,
+                    payload.percentage,
+                    payload.fixed_amount,
+                ),
             )
     except CheckViolation as error:
         raise HTTPException(status_code=400, detail="Invalid budget allocation") from error
@@ -1684,39 +1754,12 @@ def dashboard(
             (user_id, current_start, current_end),
         ).fetchall()
 
-        budget_row = connection.execute(
-            """
-            select
-              coalesce(
-                case
-                  when bs.base_mode = 'manual' then bs.manual_amount
-                  else (
-                    select coalesce(sum(t.amount), 0)
-                    from public.transactions t
-                    where t.user_id = bs.user_id
-                      and t.status = 'completed'
-                      and t.direction = 'income'
-                      and t.occurred_on >= %s and t.occurred_on < %s
-                      and (
-                        bs.base_mode = 'total_income'
-                        or (
-                          bs.base_mode = 'category_income'
-                          and t.category_id = bs.income_category_id
-                        )
-                      )
-                  )
-                end,
-                0
-              ) as base_amount,
-              coalesce(sum(ba.percentage), 0) as total_percentage,
-              count(ba.id) as allocation_count
-            from public.budget_settings bs
-            left join public.budget_allocations ba on ba.user_id = bs.user_id
-            where bs.user_id = %s
-            group by bs.user_id, bs.base_mode, bs.manual_amount, bs.income_category_id
-            """,
-            (current_start, current_end, user_id),
-        ).fetchone()
+        budget_summary = build_budget_summary(
+            connection,
+            user_id,
+            selected_year,
+            selected_month,
+        )
 
         planned_totals = connection.execute(
             """
@@ -1783,20 +1826,14 @@ def dashboard(
     )
     next_income = planned.get(Direction.INCOME, Decimal("0.00")) + commitment_income
     next_expenses = planned.get(Direction.EXPENSE, Decimal("0.00")) + commitment_expenses
-    budget_overview = None
-    if budget_row:
-        budget_base = as_money(budget_row["base_amount"])
-        budget_percentage = Decimal(budget_row["total_percentage"])
-        budget_unallocated_percentage = Decimal("100.00") - budget_percentage
-        budget_overview = BudgetDashboardRead(
-            base_amount=budget_base,
-            total_percentage=budget_percentage,
-            unallocated_percentage=budget_unallocated_percentage,
-            unallocated_amount=(
-                budget_base * budget_unallocated_percentage / Decimal("100")
-            ).quantize(Decimal("0.01")),
-            allocation_count=budget_row["allocation_count"],
-        )
+    budget_overview = BudgetDashboardRead(
+        base_amount=budget_summary["base_amount"],
+        allocated_amount=budget_summary["allocated_amount"],
+        total_percentage=budget_summary["total_percentage"],
+        unallocated_percentage=budget_summary["unallocated_percentage"],
+        unallocated_amount=budget_summary["unallocated_amount"],
+        allocation_count=len(budget_summary["allocations"]),
+    )
 
     return {
         "month": f"{selected_year:04d}-{selected_month:02d}",

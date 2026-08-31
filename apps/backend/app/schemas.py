@@ -44,6 +44,11 @@ class BudgetBaseMode(StrEnum):
     MANUAL = "manual"
 
 
+class BudgetAllocationMode(StrEnum):
+    PERCENTAGE = "percentage"
+    FIXED_AMOUNT = "fixed_amount"
+
+
 class CategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     kind: CategoryKind
@@ -193,13 +198,26 @@ class BudgetSettingsRead(BudgetSettingsUpdate):
 
 
 class BudgetAllocationUpdate(BaseModel):
-    percentage: Decimal = Field(gt=0, le=100, max_digits=5, decimal_places=2)
+    allocation_mode: BudgetAllocationMode
+    percentage: Decimal | None = Field(default=None, gt=0, le=100, max_digits=5, decimal_places=2)
+    fixed_amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+
+    @model_validator(mode="after")
+    def validate_allocation(self):
+        if self.allocation_mode == BudgetAllocationMode.PERCENTAGE:
+            if self.percentage is None or self.fixed_amount is not None:
+                raise ValueError("Percentage allocations require only percentage")
+        elif self.fixed_amount is None or self.percentage is not None:
+            raise ValueError("Fixed allocations require only fixed_amount")
+        return self
 
 
 class BudgetAllocationRead(BaseModel):
     category_id: UUID
     category_name: str
+    allocation_mode: BudgetAllocationMode
     percentage: Decimal
+    fixed_amount: Decimal | None = None
     target_amount: Decimal
     actual_amount: Decimal
     remaining_amount: Decimal
@@ -209,6 +227,7 @@ class BudgetSummaryRead(BaseModel):
     month: str
     settings: BudgetSettingsRead
     base_amount: Decimal
+    allocated_amount: Decimal
     total_percentage: Decimal
     unallocated_percentage: Decimal
     unallocated_amount: Decimal
@@ -217,6 +236,7 @@ class BudgetSummaryRead(BaseModel):
 
 class BudgetDashboardRead(BaseModel):
     base_amount: Decimal
+    allocated_amount: Decimal
     total_percentage: Decimal
     unallocated_percentage: Decimal
     unallocated_amount: Decimal
