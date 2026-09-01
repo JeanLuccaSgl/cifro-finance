@@ -757,12 +757,13 @@ def update_category(
 
 
 @router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_category(category_id: UUID, user_id: UUID = Depends(current_user_id)) -> None:
+def archive_category(category_id: UUID, user_id: UUID = Depends(current_user_id)) -> None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            delete from public.categories
-            where id = %s and user_id = %s
+            update public.categories
+            set is_active = false
+            where id = %s and user_id = %s and is_active = true
             returning id
             """,
             (category_id, user_id),
@@ -927,7 +928,7 @@ def build_budget_summary(connection, user_id: UUID, year: int, month: int) -> di
          and t.direction = 'expense'
          and t.status = 'completed'
          and t.occurred_on >= %s and t.occurred_on < %s
-        where ba.user_id = %s and ba.budget_month_id = %s and c.is_active = true
+        where ba.user_id = %s and ba.budget_month_id = %s
         group by
           ba.category_id, c.name, ba.allocation_mode,
           ba.percentage, ba.fixed_amount

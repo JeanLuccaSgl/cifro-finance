@@ -1922,14 +1922,14 @@ function CategoriesView({ session, accountName, onLogout }) {
     }
   }
 
-  async function removeCategory(category) {
-    if (!window.confirm(`Excluir a categoria “${category.name}”? Os registros continuam salvos, mas ficarão sem categoria.`)) return;
+  async function archiveCategory(category) {
+    if (!window.confirm(`Arquivar a categoria “${category.name}”? Ela ficará fora de novos registros, mas continuará aparecendo no histórico.`)) return;
 
     try {
       await apiRequest(`/api/v1/categories/${category.id}`, session, { method: "DELETE" });
       setCategories((current) => current.filter((item) => item.id !== category.id));
       if (editingId === category.id) setEditingId(null);
-      setNotice(`Categoria “${category.name}” excluída`);
+      setNotice(`Categoria “${category.name}” arquivada`);
     } catch (error) {
       setNotice(error.message);
     }
@@ -2006,7 +2006,7 @@ function CategoriesView({ session, accountName, onLogout }) {
                     <span className="categoryKind">{categoryKindLabel(category.kind)}</span>
                     <div className="rowActions">
                       <button type="button" onClick={() => startEditing(category)}>Editar</button>
-                      <button type="button" onClick={() => removeCategory(category)}>Excluir</button>
+                      <button type="button" onClick={() => archiveCategory(category)}>Arquivar</button>
                     </div>
                   </>
                 )}
