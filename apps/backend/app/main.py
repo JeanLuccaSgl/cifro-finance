@@ -1224,21 +1224,64 @@ def delete_budget_allocation(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def category_for_commitment(connection, category_id: UUID | None, user_id: UUID) -> str | None:
+def validate_category_for_direction(
+    connection,
+    category_id: UUID | None,
+    direction: str,
+    user_id: UUID,
+) -> dict | None:
     if not category_id:
         return None
 
     category = connection.execute(
         """
-        select name
+        select id, name, kind, is_active
         from public.categories
-        where id = %s and user_id = %s and is_active = true
+        where id = %s and user_id = %s
         """,
         (category_id, user_id),
     ).fetchone()
-    if not category:
-        raise HTTPException(status_code=400, detail="Category not found")
-    return category["name"]
+    if not category or not category["is_active"]:
+        raise HTTPException(status_code=400, detail="Category not found or inactive")
+    if category["kind"] not in (direction, "both"):
+        raise HTTPException(
+            status_code=400,
+            detail="Category is not compatible with this direction",
+        )
+    return category
+
+
+def validate_commitment_for_transaction(
+    connection,
+    commitment_id: UUID | None,
+    direction: str,
+    category_id: UUID | None,
+    user_id: UUID,
+) -> dict | None:
+    if not commitment_id:
+        return None
+
+    commitment = connection.execute(
+        """
+        select id, category_id, direction, is_active
+        from public.commitments
+        where id = %s and user_id = %s
+        """,
+        (commitment_id, user_id),
+    ).fetchone()
+    if not commitment or not commitment["is_active"]:
+        raise HTTPException(status_code=400, detail="Commitment not found or inactive")
+    if commitment["direction"] != direction:
+        raise HTTPException(
+            status_code=400,
+            detail="Commitment is not compatible with this direction",
+        )
+    if category_id and commitment["category_id"] and category_id != commitment["category_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Transaction category must match its commitment category",
+        )
+    return commitment
 
 
 @router.get("/commitments", response_model=list[CommitmentRead])
@@ -1283,7 +1326,12 @@ def create_commitment(payload: CommitmentCreate, user_id: UUID = Depends(current
             raise HTTPException(status_code=400, detail="Could not calculate the business-day occurrence")
 
     with get_connection() as connection:
-        category_name = category_for_commitment(connection, payload.category_id, user_id)
+        category = validate_category_for_direction(
+            connection,
+            payload.category_id,
+            payload.direction.value,
+            user_id,
+        )
         row = connection.execute(
             """
             insert into public.commitments (
@@ -1314,7 +1362,7 @@ def create_commitment(payload: CommitmentCreate, user_id: UUID = Depends(current
                 payload.current_installment,
             ),
         ).fetchone()
-    row["category_name"] = category_name
+    row["category_name"] = category["name"] if category else None
     return row
 
 
@@ -1331,7 +1379,12 @@ def update_commitment(
             raise HTTPException(status_code=400, detail="Could not calculate the business-day occurrence")
 
     with get_connection() as connection:
-        category_name = category_for_commitment(connection, payload.category_id, user_id)
+        category = validate_category_for_direction(
+            connection,
+            payload.category_id,
+            payload.direction.value,
+            user_id,
+        )
         row = connection.execute(
             """
             update public.commitments
@@ -1366,7 +1419,7 @@ def update_commitment(
 
     if not row:
         raise HTTPException(status_code=404, detail="Commitment not found")
-    row["category_name"] = category_name
+    row["category_name"] = category["name"] if category else None
     return row
 
 
@@ -1757,6 +1810,19 @@ async def preview_transaction_import(
 @router.post("/transactions", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
 def create_transaction(payload: TransactionCreate, user_id: UUID = Depends(current_user_id)) -> dict:
     with get_connection() as connection:
+        category = validate_category_for_direction(
+            connection,
+            payload.category_id,
+            payload.direction.value,
+            user_id,
+        )
+        validate_commitment_for_transaction(
+            connection,
+            payload.commitment_id,
+            payload.direction.value,
+            payload.category_id,
+            user_id,
+        )
         row = connection.execute(
             """
             insert into public.transactions (
@@ -1779,18 +1845,7 @@ def create_transaction(payload: TransactionCreate, user_id: UUID = Depends(curre
                 payload.notes,
             ),
         ).fetchone()
-        category_name = None
-        if payload.category_id:
-            category = connection.execute(
-                """
-                select name
-                from public.categories
-                where id = %s and user_id = %s
-                """,
-                (payload.category_id, user_id),
-            ).fetchone()
-            category_name = category["name"] if category else None
-    row["category_name"] = category_name
+    row["category_name"] = category["name"] if category else None
     return row
 
 
@@ -1832,17 +1887,50 @@ def update_transaction(
         parameters.append(value)
 
     with get_connection() as connection:
-        if payload.category_id:
+        current = connection.execute(
+            """
+            select id, direction, category_id, commitment_id
+            from public.transactions
+            where id = %s and user_id = %s
+            for update
+            """,
+            (transaction_id, user_id),
+        ).fetchone()
+        if not current:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+
+        effective_direction = values.get("direction", current["direction"])
+        if isinstance(effective_direction, Direction):
+            effective_direction = effective_direction.value
+        effective_category_id = values.get("category_id", current["category_id"])
+        effective_commitment_id = values.get("commitment_id", current["commitment_id"])
+
+        category = None
+        if effective_category_id and ({"category_id", "direction"} & values.keys()):
+            category = validate_category_for_direction(
+                connection,
+                effective_category_id,
+                effective_direction,
+                user_id,
+            )
+        elif effective_category_id:
             category = connection.execute(
                 """
-                select id
+                select name
                 from public.categories
-                where id = %s and user_id = %s and is_active = true
+                where id = %s and user_id = %s
                 """,
-                (payload.category_id, user_id),
+                (effective_category_id, user_id),
             ).fetchone()
-            if not category:
-                raise HTTPException(status_code=400, detail="Category not found")
+
+        if effective_commitment_id and ({"commitment_id", "category_id", "direction"} & values.keys()):
+            validate_commitment_for_transaction(
+                connection,
+                effective_commitment_id,
+                effective_direction,
+                effective_category_id,
+                user_id,
+            )
 
         parameters.extend([transaction_id, user_id])
         row = connection.execute(
@@ -1859,8 +1947,8 @@ def update_transaction(
         if not row:
             raise HTTPException(status_code=404, detail="Transaction not found")
 
-        category_name = None
-        if row["category_id"]:
+        category_name = category["name"] if category else None
+        if row["category_id"] and category_name is None:
             category = connection.execute(
                 """
                 select name
