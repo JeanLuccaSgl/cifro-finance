@@ -102,6 +102,53 @@ def first_business_occurrence(start: date, ordinal: int) -> date | None:
     return None
 
 
+def fixed_commitment_date(year: int, month: int, due_day: int) -> date:
+    """Return a fixed billing day, clamped in shorter months."""
+    return date(year, month, min(due_day, monthrange(year, month)[1]))
+
+
+def commitment_due_day(row: dict) -> int:
+    """Read the explicit billing day, with a safe fallback for old rows."""
+    return row.get("due_day") or row["next_due_on"].day
+
+
+def commitment_due_month(row: dict) -> int:
+    """Read the explicit yearly billing month, with a legacy fallback."""
+    return row.get("due_month") or row["next_due_on"].month
+
+
+def first_fixed_occurrence(start: date, frequency: str, due_day: int, due_month: int | None = None) -> date:
+    if frequency == "monthly":
+        candidate = fixed_commitment_date(start.year, start.month, due_day)
+        if candidate < start:
+            year, month = next_month(start.year, start.month)
+            return fixed_commitment_date(year, month, due_day)
+        return candidate
+
+    candidate = fixed_commitment_date(start.year, due_month or start.month, due_day)
+    if candidate < start:
+        candidate = fixed_commitment_date(start.year + 1, due_month or start.month, due_day)
+    return candidate
+
+
+def first_commitment_occurrence(
+    start: date,
+    frequency: str,
+    due_rule: str,
+    due_day: int | None,
+    due_month: int | None,
+    business_day_number: int | None,
+) -> date | None:
+    if due_rule == "business_day":
+        if frequency == "monthly":
+            return first_business_occurrence(start, business_day_number)
+        candidate = business_day_date(start.year, due_month or start.month, business_day_number)
+        if candidate and candidate < start:
+            candidate = business_day_date(start.year + 1, due_month or start.month, business_day_number)
+        return candidate
+    return first_fixed_occurrence(start, frequency, due_day, due_month)
+
+
 def as_money(value: Decimal | None) -> Decimal:
     return value or Decimal("0.00")
 
@@ -471,16 +518,14 @@ def projected_commitment_date(row: dict, year: int, month: int) -> date | None:
         if row["due_rule"] == "business_day":
             projected = business_day_date(year, month, row["business_day_number"])
         else:
-            day = min(baseline.day, monthrange(year, month)[1])
-            projected = date(year, month, day)
+            projected = fixed_commitment_date(year, month, commitment_due_day(row))
     elif row["frequency"] == "yearly":
-        if baseline.month != month:
+        if commitment_due_month(row) != month:
             return None
         if row["due_rule"] == "business_day":
             projected = business_day_date(year, month, row["business_day_number"])
         else:
-            day = min(baseline.day, monthrange(year, month)[1])
-            projected = date(year, month, day)
+            projected = fixed_commitment_date(year, month, commitment_due_day(row))
     else:
         return None
 
@@ -514,20 +559,20 @@ def next_commitment_due_date(row: dict) -> date | None:
         year, month = next_month(current.year, current.month)
         if row["due_rule"] == "business_day":
             return business_day_date(year, month, row["business_day_number"])
-        return date(year, month, min(row["starts_on"].day, monthrange(year, month)[1]))
+        return fixed_commitment_date(year, month, commitment_due_day(row))
 
     if row["frequency"] == "yearly":
         year = current.year + 1
         if row["due_rule"] == "business_day":
-            return business_day_date(year, current.month, row["business_day_number"])
-        return date(year, current.month, min(row["starts_on"].day, monthrange(year, current.month)[1]))
+            return business_day_date(year, commitment_due_month(row), row["business_day_number"])
+        return fixed_commitment_date(year, commitment_due_month(row), commitment_due_day(row))
 
     return None
 
 
 COMMITMENT_COLUMNS = """
   c.id, c.user_id, c.category_id, c.name, c.commitment_type, c.direction,
-  c.amount, c.frequency, c.due_rule, c.business_day_number, c.starts_on,
+  c.amount, c.frequency, c.due_rule, c.due_day, c.due_month, c.business_day_number, c.starts_on,
   c.next_due_on, c.ends_on, c.total_installments, c.current_installment,
   c.is_active, c.created_at
 """
@@ -1291,7 +1336,7 @@ def list_commitments(user_id: UUID = Depends(current_user_id)) -> list[dict]:
             """
             select
               c.id, c.name, c.commitment_type, c.direction, c.amount,
-              c.frequency, c.due_rule, c.business_day_number,
+              c.frequency, c.due_rule, c.due_day, c.due_month, c.business_day_number,
               c.starts_on, c.next_due_on, c.ends_on,
               c.category_id, c.total_installments, c.current_installment,
               c.is_active, c.created_at, cat.name as category_name
@@ -1319,11 +1364,16 @@ def list_commitments(user_id: UUID = Depends(current_user_id)) -> list[dict]:
 
 @router.post("/commitments", response_model=CommitmentRead, status_code=status.HTTP_201_CREATED)
 def create_commitment(payload: CommitmentCreate, user_id: UUID = Depends(current_user_id)) -> dict:
-    next_due_on = payload.next_due_on
+    next_due_on = first_commitment_occurrence(
+        payload.starts_on,
+        payload.frequency.value,
+        payload.due_rule.value,
+        payload.due_day,
+        payload.due_month,
+        payload.business_day_number,
+    )
     if next_due_on is None:
-        next_due_on = first_business_occurrence(payload.starts_on, payload.business_day_number)
-        if next_due_on is None:
-            raise HTTPException(status_code=400, detail="Could not calculate the business-day occurrence")
+        raise HTTPException(status_code=400, detail="Could not calculate the commitment occurrence")
 
     with get_connection() as connection:
         category = validate_category_for_direction(
@@ -1336,13 +1386,13 @@ def create_commitment(payload: CommitmentCreate, user_id: UUID = Depends(current
             """
             insert into public.commitments (
               user_id, category_id, name, commitment_type, direction, amount,
-              frequency, due_rule, business_day_number,
+              frequency, due_rule, due_day, due_month, business_day_number,
               starts_on, next_due_on, ends_on,
               total_installments, current_installment
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             returning id, name, commitment_type, direction, amount, frequency,
-              due_rule, business_day_number, starts_on, next_due_on, ends_on, category_id,
+              due_rule, due_day, due_month, business_day_number, starts_on, next_due_on, ends_on, category_id,
               total_installments, current_installment, is_active, created_at
             """,
             (
@@ -1354,6 +1404,8 @@ def create_commitment(payload: CommitmentCreate, user_id: UUID = Depends(current
                 payload.amount,
                 payload.frequency.value,
                 payload.due_rule.value,
+                payload.due_day,
+                payload.due_month,
                 payload.business_day_number,
                 payload.starts_on,
                 next_due_on,
@@ -1372,11 +1424,16 @@ def update_commitment(
     payload: CommitmentUpdate,
     user_id: UUID = Depends(current_user_id),
 ) -> dict:
-    next_due_on = payload.next_due_on
+    next_due_on = first_commitment_occurrence(
+        payload.starts_on,
+        payload.frequency.value,
+        payload.due_rule.value,
+        payload.due_day,
+        payload.due_month,
+        payload.business_day_number,
+    )
     if next_due_on is None:
-        next_due_on = first_business_occurrence(payload.starts_on, payload.business_day_number)
-        if next_due_on is None:
-            raise HTTPException(status_code=400, detail="Could not calculate the business-day occurrence")
+        raise HTTPException(status_code=400, detail="Could not calculate the commitment occurrence")
 
     with get_connection() as connection:
         category = validate_category_for_direction(
@@ -1390,12 +1447,12 @@ def update_commitment(
             update public.commitments
             set category_id = %s, name = %s, commitment_type = %s,
                 direction = %s, amount = %s, frequency = %s,
-                due_rule = %s, business_day_number = %s,
+                due_rule = %s, due_day = %s, due_month = %s, business_day_number = %s,
                 starts_on = %s, next_due_on = %s, ends_on = %s,
                 total_installments = %s, current_installment = %s
             where id = %s and user_id = %s and is_active = true
             returning id, name, commitment_type, direction, amount, frequency,
-              due_rule, business_day_number, starts_on, next_due_on, ends_on, category_id,
+              due_rule, due_day, due_month, business_day_number, starts_on, next_due_on, ends_on, category_id,
               total_installments, current_installment, is_active, created_at
             """,
             (
@@ -1406,6 +1463,8 @@ def update_commitment(
                 payload.amount,
                 payload.frequency.value,
                 payload.due_rule.value,
+                payload.due_day,
+                payload.due_month,
                 payload.business_day_number,
                 payload.starts_on,
                 next_due_on,
@@ -1434,7 +1493,7 @@ def record_commitment(
             """
             select
               id, user_id, category_id, name, commitment_type, direction, amount,
-              frequency, due_rule, business_day_number, starts_on, next_due_on,
+              frequency, due_rule, due_day, due_month, business_day_number, starts_on, next_due_on,
               ends_on, total_installments, current_installment, is_active, created_at
             from public.commitments
             where id = %s and user_id = %s and is_active = true
@@ -1545,7 +1604,7 @@ def record_commitment(
             set next_due_on = %s, current_installment = %s, is_active = %s
             where id = %s and user_id = %s
             returning id, name, commitment_type, direction, amount, frequency,
-              due_rule, business_day_number, starts_on, next_due_on, ends_on,
+              due_rule, due_day, due_month, business_day_number, starts_on, next_due_on, ends_on,
               category_id, total_installments, current_installment,
               is_active, created_at
             """,
@@ -2025,7 +2084,7 @@ def dashboard(
             """
             select
               c.id, c.name, c.amount, c.direction, c.commitment_type,
-              c.frequency, c.due_rule, c.business_day_number,
+              c.frequency, c.due_rule, c.due_day, c.due_month, c.business_day_number,
               c.starts_on, c.next_due_on, c.ends_on,
               cat.name as category_name
             from public.commitments c

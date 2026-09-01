@@ -104,6 +104,8 @@ class CommitmentCreate(BaseModel):
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     frequency: CommitmentFrequency
     due_rule: CommitmentDueRule = CommitmentDueRule.FIXED_DAY
+    due_day: int | None = Field(default=None, gt=0, le=31)
+    due_month: int | None = Field(default=None, gt=0, le=12)
     business_day_number: int | None = Field(default=None, gt=0, le=31)
     starts_on: date
     next_due_on: date | None = None
@@ -114,8 +116,8 @@ class CommitmentCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_commitment(self):
-        if self.due_rule == CommitmentDueRule.FIXED_DAY and self.next_due_on is None:
-            raise ValueError("Fixed-day commitments require next_due_on")
+        if self.due_rule == CommitmentDueRule.FIXED_DAY and self.due_day is None and self.next_due_on is None:
+            raise ValueError("Fixed-day commitments require due_day or next_due_on")
         if self.next_due_on and self.next_due_on < self.starts_on:
             raise ValueError("next_due_on must be on or after starts_on")
         if self.ends_on and self.ends_on < self.starts_on:
@@ -124,8 +126,20 @@ class CommitmentCreate(BaseModel):
         if self.due_rule == CommitmentDueRule.BUSINESS_DAY:
             if self.business_day_number is None:
                 raise ValueError("Business-day commitments require business_day_number")
+            if self.due_day is not None:
+                raise ValueError("Business-day commitments cannot have due_day")
         elif self.business_day_number is not None:
             raise ValueError("Only business-day commitments can have business_day_number")
+        elif self.due_day is None and self.next_due_on is not None:
+            self.due_day = self.next_due_on.day
+
+        if self.frequency == CommitmentFrequency.YEARLY:
+            if self.due_month is None and self.next_due_on is not None:
+                self.due_month = self.next_due_on.month
+            if self.due_month is None:
+                raise ValueError("Yearly commitments require due_month or next_due_on")
+        elif self.due_month is not None:
+            raise ValueError("Only yearly commitments can have due_month")
 
         is_installment = self.commitment_type == CommitmentType.INSTALLMENT
         if is_installment:

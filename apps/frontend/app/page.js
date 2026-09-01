@@ -746,6 +746,8 @@ const emptyCommitment = {
   commitment_type: "recurring",
   frequency: "monthly",
   due_rule: "fixed_day",
+  due_day: "",
+  due_month: "",
   business_day_number: "",
   starts_on: "",
   next_due_on: "",
@@ -1565,6 +1567,8 @@ function PlanningView({ session, accountName, onLogout }) {
       commitment_type: commitment.commitment_type,
       frequency: commitment.frequency,
       due_rule: commitment.due_rule,
+      due_day: commitment.due_day ? String(commitment.due_day) : commitment.next_due_on.slice(8, 10),
+      due_month: commitment.due_month ? String(commitment.due_month) : commitment.next_due_on.slice(5, 7),
       business_day_number: commitment.business_day_number ? String(commitment.business_day_number) : "",
       starts_on: commitment.starts_on,
       next_due_on: commitment.next_due_on,
@@ -1588,6 +1592,10 @@ function PlanningView({ session, accountName, onLogout }) {
     const amount = Number(String(form.amount).replace(",", "."));
     const installmentTotal = form.commitment_type === "installment" ? Number(form.total_installments) : null;
     const installmentCurrent = form.commitment_type === "installment" ? Number(form.current_installment) : null;
+    const dueDay = form.due_rule === "fixed_day" ? Number(form.next_due_on.slice(8, 10)) : null;
+    const dueMonth = form.frequency === "yearly"
+      ? Number(form.next_due_on.slice(5, 7))
+      : null;
     const businessDayNumber = form.due_rule === "business_day" ? Number(form.business_day_number) : null;
 
     const automaticNextDue = form.due_rule === "business_day"
@@ -1610,6 +1618,14 @@ function PlanningView({ session, accountName, onLogout }) {
       setNotice("Informe qual dia útil deve ser usado, entre 1 e 31.");
       return;
     }
+    if (form.due_rule === "fixed_day" && (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31)) {
+      setNotice("Informe uma data de cobrança válida.");
+      return;
+    }
+    if (form.frequency === "yearly" && (!Number.isInteger(dueMonth) || dueMonth < 1 || dueMonth > 12)) {
+      setNotice("Informe uma data anual válida.");
+      return;
+    }
 
     setBusy(true);
     try {
@@ -1620,6 +1636,8 @@ function PlanningView({ session, accountName, onLogout }) {
         commitment_type: form.commitment_type,
         frequency: form.frequency,
         due_rule: form.due_rule,
+        due_day: dueDay,
+        due_month: dueMonth,
         business_day_number: businessDayNumber,
         starts_on: form.starts_on,
         next_due_on: automaticNextDue || null,
