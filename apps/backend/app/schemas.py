@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class CategoryKind(StrEnum):
@@ -74,7 +74,15 @@ class TransactionCreate(BaseModel):
     category_id: UUID | None = None
     commitment_id: UUID | None = None
     status: TransactionStatus = TransactionStatus.COMPLETED
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Description must contain at least one non-space character")
+        return normalized
 
 
 class TransactionUpdate(BaseModel):
@@ -85,7 +93,17 @@ class TransactionUpdate(BaseModel):
     category_id: UUID | None = None
     commitment_id: UUID | None = None
     status: TransactionStatus | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Description must contain at least one non-space character")
+        return normalized
 
 
 class TransactionRead(TransactionCreate):

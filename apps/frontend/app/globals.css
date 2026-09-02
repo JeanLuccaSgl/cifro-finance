@@ -164,6 +164,8 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .registrationIntro h2 { margin-bottom: 13px; font-size: clamp(26px, 4vw, 38px); letter-spacing: -1.5px; }
 .registrationIntro p:last-child { max-width: 390px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .registrationEntry { max-width: 700px; min-height: 64px; margin-top: 0; }
+.characterCount { color: #68738b; font-family: 'DM Mono', monospace; font-size: 9px; }
+.quickEntryCount { max-width: 700px; margin: 7px 0 0; text-align: right; }
 .entryExamples { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
 .entryExamples span { padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; color: #7c87a0; background: #0b1224; font-family: 'DM Mono', monospace; font-size: 9px; }
 .confirmationPanel { max-width: 700px; margin-top: 26px; padding: 22px; border: 1px solid #344466; background: #0d162c; }

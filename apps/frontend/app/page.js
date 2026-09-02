@@ -6,6 +6,7 @@ import { getSupabaseBrowserClient } from "../lib/supabase";
 import { useSession } from "./providers";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const MAX_DESCRIPTION_LENGTH = 160;
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("pt-BR", {
@@ -129,19 +130,55 @@ function parseQuickEntry(text) {
   };
 }
 
+function formatApiError(body, fallback) {
+  const detail = body?.detail ?? body?.message;
+  if (typeof detail === "string" && detail.trim()) return detail;
+
+  if (Array.isArray(detail)) {
+    const messages = detail.map((item) => {
+      if (typeof item === "string") return item;
+      if (!item || typeof item !== "object") return "";
+
+      const field = Array.isArray(item.loc) ? item.loc[item.loc.length - 1] : null;
+      const label = field === "description" ? "A descrição" : field === "notes" ? "As observações" : "Este campo";
+      if (item.type === "string_too_long") {
+        return `${label} pode ter no máximo ${item.ctx?.max_length || 160} caracteres.`;
+      }
+      if (item.type === "string_too_short") {
+        return `${label} precisa ser preenchido.`;
+      }
+      if (item.type === "value_error" && field === "description") {
+        return "Informe uma descrição com pelo menos um caractere válido.";
+      }
+      return typeof item.message === "string" ? item.message : "Revise os dados informados.";
+    }).filter(Boolean);
+    if (messages.length > 0) return messages.join(" · ");
+  }
+
+  if (detail && typeof detail === "object" && typeof detail.message === "string") {
+    return detail.message;
+  }
+  return fallback;
+}
+
 async function apiRequest(path, session, options = {}) {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${session.access_token}`,
-      ...(options.headers || {}),
-    },
-  });
+  let response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+        ...(options.headers || {}),
+      },
+    });
+  } catch {
+    throw new Error("Não foi possível conectar à API. Tente novamente.");
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || "Não foi possível falar com a API.");
+    throw new Error(formatApiError(body, "Não foi possível falar com a API."));
   }
 
   if (response.status === 204) return null;
@@ -522,10 +559,12 @@ function RegisterView({ session, accountName, onLogout }) {
             onChange={(event) => setText(event.target.value)}
             placeholder="Ex.: gastei 28 no almoço"
             aria-label="Registrar movimentação por texto"
+            maxLength={MAX_DESCRIPTION_LENGTH}
             autoFocus
           />
           <button type="submit">Registrar</button>
         </form>
+        <p className="characterCount quickEntryCount" aria-live="polite">{text.length}/{MAX_DESCRIPTION_LENGTH}</p>
         <div className="entryExamples" aria-label="Exemplos de registro">
           <span>gastei 28 no almoço</span>
           <span>recebi 480 de freelance</span>
@@ -566,11 +605,11 @@ function RegisterView({ session, accountName, onLogout }) {
                 />
               </label>
               <label className="confirmationField confirmationWide">
-                <span>Descrição</span>
+                <span>Descrição <small>{pendingDescription.length}/{MAX_DESCRIPTION_LENGTH}</small></span>
                 <input
                   value={pendingDescription}
                   onChange={(event) => setPendingDescription(event.target.value)}
-                  maxLength={160}
+                  maxLength={MAX_DESCRIPTION_LENGTH}
                 />
               </label>
               <label className="confirmationField confirmationWide">
@@ -645,8 +684,8 @@ function RegisterView({ session, accountName, onLogout }) {
                 <input type="number" min="0.01" step="0.01" value={editAmount} onChange={(event) => setEditAmount(event.target.value)} />
               </label>
               <label className="confirmationField confirmationWide">
-                <span>Descrição</span>
-                <input value={editDescription} onChange={(event) => setEditDescription(event.target.value)} maxLength={160} />
+                <span>Descrição <small>{editDescription.length}/{MAX_DESCRIPTION_LENGTH}</small></span>
+                <input value={editDescription} onChange={(event) => setEditDescription(event.target.value)} maxLength={MAX_DESCRIPTION_LENGTH} />
               </label>
               <label className="confirmationField">
                 <span>Data</span>
@@ -896,7 +935,7 @@ function DataView({ session, accountName, onLogout }) {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        throw new Error(body.detail || "Não foi possível exportar os registros.");
+        throw new Error(formatApiError(body, "Não foi possível exportar os registros."));
       }
 
       const file = await response.blob();
@@ -931,7 +970,7 @@ function DataView({ session, accountName, onLogout }) {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        throw new Error(body.detail || "Não foi possível analisar a planilha.");
+        throw new Error(formatApiError(body, "Não foi possível analisar a planilha."));
       }
       setPreview(await response.json());
       setNotice("Planilha analisada. Nada foi salvo.");

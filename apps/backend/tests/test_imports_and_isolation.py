@@ -1,16 +1,25 @@
 import unittest
+import asyncio
+from datetime import date
+from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from apps.backend.app.main import (
+    IMPORT_MAX_BYTES,
     normalize_import_row,
     parse_import_amount,
     parse_import_date,
     parse_import_partial_date,
+    preview_transaction_import,
+    read_import_sheets,
+    safe_csv_text,
     validate_category_for_direction,
     validate_commitment_for_transaction,
 )
+from apps.backend.app.schemas import Direction, TransactionCreate
 
 
 class ImportParsingTests(unittest.TestCase):
@@ -48,6 +57,61 @@ class ImportParsingTests(unittest.TestCase):
         self.assertIn("Descrição ausente", result["errors"])
         self.assertIn("Data ausente ou inválida", result["errors"])
         self.assertIn("Valor ausente ou inválido", result["errors"])
+
+    def test_csv_formula_prefixes_are_exported_as_text(self):
+        for value in ("=1+1", "+cmd", "-10", "@SUM(A1)", "\t=1+1"):
+            self.assertTrue(safe_csv_text(value).startswith("'"))
+        self.assertEqual(safe_csv_text("mercado"), "mercado")
+
+    def test_corrupt_xlsx_is_rejected_by_file_reader(self):
+        with self.assertRaises(Exception):
+            read_import_sheets("dados.xlsx", b"not-an-xlsx")
+
+    def test_upload_is_read_only_up_to_the_limit_plus_one_byte(self):
+        class OversizedUpload:
+            filename = "dados.csv"
+
+            def __init__(self):
+                self.requested_size = None
+
+            async def read(self, size=-1):
+                self.requested_size = size
+                return b"x" * size
+
+        upload = OversizedUpload()
+        with self.assertRaises(HTTPException) as context:
+            asyncio.run(preview_transaction_import(upload, uuid4()))
+
+        self.assertEqual(context.exception.status_code, 413)
+        self.assertEqual(upload.requested_size, IMPORT_MAX_BYTES + 1)
+
+
+class TransactionTextValidationTests(unittest.TestCase):
+    def transaction_payload(self, **overrides):
+        payload = {
+            "description": "Almoço",
+            "amount": Decimal("20.00"),
+            "direction": Direction.EXPENSE,
+            "occurred_on": date(2026, 9, 2),
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_description_limit_and_normalization(self):
+        valid = TransactionCreate(**self.transaction_payload(description="  Almoço  "))
+        self.assertEqual(valid.description, "Almoço")
+        self.assertEqual(len(TransactionCreate(**self.transaction_payload(description="x" * 160)).description), 160)
+
+        with self.assertRaises(ValidationError):
+            TransactionCreate(**self.transaction_payload(description="x" * 161))
+        with self.assertRaises(ValidationError):
+            TransactionCreate(**self.transaction_payload(description="   "))
+
+    def test_notes_have_a_bounded_size(self):
+        valid = TransactionCreate(**self.transaction_payload(notes="x" * 2000))
+        self.assertEqual(len(valid.notes), 2000)
+        with self.assertRaises(ValidationError):
+            TransactionCreate(**self.transaction_payload(notes="x" * 2001))
 
 
 class QueryResult:

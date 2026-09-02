@@ -6,12 +6,15 @@ import re
 import unicodedata
 from typing import Annotated
 from uuid import UUID
+from xml.etree.ElementTree import ParseError
+from zipfile import BadZipFile
 
 import psycopg
 from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg.errors import CheckViolation, UniqueViolation
 from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 
 from .config import settings
 from .db import get_connection
@@ -79,6 +82,9 @@ def as_money(value: Decimal | None) -> Decimal:
 
 
 IMPORT_MAX_BYTES = 10 * 1024 * 1024
+IMPORT_MAX_SHEETS = 24
+IMPORT_MAX_ROWS_PER_SHEET = 10_000
+IMPORT_MAX_COLUMNS_PER_SHEET = 100
 IMPORT_PREVIEW_LIMIT = 100
 IMPORT_FIELDS = ("date", "description", "amount", "direction", "income", "expense", "category", "status", "notes")
 IMPORT_MONTH_NAMES = {
@@ -118,6 +124,28 @@ IMPORT_ALIASES = {
     "status": ("status", "situacao", "estado"),
     "notes": ("observacoes", "observacao", "obs", "notas", "notes"),
 }
+
+
+class ImportLimitError(ValueError):
+    """Raised when an import exceeds a deliberate resource limit."""
+
+
+def safe_csv_text(value: object) -> str:
+    """Keep user-controlled text from being interpreted as a spreadsheet formula."""
+    text = "" if value is None else str(value)
+    stripped = text.lstrip(" \t\r\n")
+    if stripped[:1] in {"=", "+", "-", "@"} or text[:1] in {"\t", "\r", "\n"}:
+        return "'" + text
+    return text
+
+
+def import_format(filename: str) -> str | None:
+    lower_filename = filename.lower()
+    if lower_filename.endswith(".csv"):
+        return "csv"
+    if lower_filename.endswith(".xlsx"):
+        return "xlsx"
+    return None
 
 
 def normalize_import_text(value: object) -> str:
@@ -403,7 +431,8 @@ def normalize_import_row(
 
 
 def read_import_sheets(filename: str, content: bytes) -> list[tuple[str, list[list[object]]]]:
-    if filename.lower().endswith(".csv"):
+    file_type = import_format(filename)
+    if file_type == "csv":
         try:
             text = content.decode("utf-8-sig")
         except UnicodeDecodeError:
@@ -414,14 +443,40 @@ def read_import_sheets(filename: str, content: bytes) -> list[tuple[str, list[li
         except csv.Error:
             dialect = csv.excel
             dialect.delimiter = ";"
-        rows = list(csv.reader(io.StringIO(text), dialect))
+        rows = []
+        for row_number, row in enumerate(csv.reader(io.StringIO(text), dialect), start=1):
+            if row_number > IMPORT_MAX_ROWS_PER_SHEET:
+                raise ImportLimitError("A planilha excede o limite de linhas permitido")
+            if len(row) > IMPORT_MAX_COLUMNS_PER_SHEET:
+                raise ImportLimitError("A planilha excede o limite de colunas permitido")
+            rows.append(row)
         return [(filename.rsplit(".", 1)[0], rows)]
 
-    if filename.lower().endswith(".xlsx"):
+    if file_type == "xlsx":
         workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        if len(workbook.worksheets) > IMPORT_MAX_SHEETS:
+            workbook.close()
+            raise ImportLimitError("A planilha excede o limite de abas permitido")
         sheets = []
         for worksheet in workbook.worksheets:
-            rows = [list(row) for row in worksheet.iter_rows(values_only=True)]
+            rows = []
+            for row_number, row in enumerate(
+                worksheet.iter_rows(
+                    values_only=True,
+                    max_row=IMPORT_MAX_ROWS_PER_SHEET + 1,
+                    max_col=IMPORT_MAX_COLUMNS_PER_SHEET + 1,
+                ),
+                start=1,
+            ):
+                if row_number > IMPORT_MAX_ROWS_PER_SHEET:
+                    if any(import_cell_text(value) for value in row):
+                        workbook.close()
+                        raise ImportLimitError("A planilha excede o limite de linhas permitido")
+                    break
+                if len(row) > IMPORT_MAX_COLUMNS_PER_SHEET and any(row[IMPORT_MAX_COLUMNS_PER_SHEET:]):
+                    workbook.close()
+                    raise ImportLimitError("A planilha excede o limite de colunas permitido")
+                rows.append(list(row[:IMPORT_MAX_COLUMNS_PER_SHEET]))
             sheets.append((worksheet.title, rows))
         workbook.close()
         return sheets
@@ -1531,12 +1586,12 @@ def export_transactions(user_id: UUID = Depends(current_user_id)) -> Response:
         writer.writerow(
             [
                 row["occurred_on"].isoformat(),
-                row["description"],
+                safe_csv_text(row["description"]),
                 f"{row['amount']:.2f}".replace(".", ","),
                 "recebimento" if row["direction"] == Direction.INCOME else "gasto",
-                row["category_name"] or "",
+                safe_csv_text(row["category_name"]),
                 "concluido" if row["status"] == "completed" else "pendente",
-                row["notes"] or "",
+                safe_csv_text(row["notes"]),
             ]
         )
 
@@ -1555,13 +1610,22 @@ async def preview_transaction_import(
     """Read an import file without persisting any row."""
     del user_id  # Authentication is required; this first stage is read-only.
     filename = file.filename or "planilha"
-    content = await file.read()
+    file_type = import_format(filename)
+    if file_type is None:
+        raise HTTPException(status_code=400, detail="Use um arquivo CSV ou XLSX")
+
+    content = await file.read(IMPORT_MAX_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="A planilha está vazia")
     if len(content) > IMPORT_MAX_BYTES:
         raise HTTPException(status_code=413, detail="A planilha deve ter no máximo 10 MB")
 
-    sheets = read_import_sheets(filename, content)
+    try:
+        sheets = read_import_sheets(filename, content)
+    except ImportLimitError as error:
+        raise HTTPException(status_code=413, detail=str(error)) from error
+    except (BadZipFile, InvalidFileException, OSError, ParseError, ValueError, KeyError) as error:
+        raise HTTPException(status_code=400, detail="Não foi possível ler este arquivo como uma planilha válida") from error
     sheet_previews = []
     total_rows = 0
     valid_rows = 0
