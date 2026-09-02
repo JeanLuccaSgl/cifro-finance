@@ -1,6 +1,5 @@
 import csv
 import io
-from calendar import monthrange
 from datetime import date, datetime
 from decimal import Decimal
 import re
@@ -16,6 +15,16 @@ from openpyxl import load_workbook
 
 from .config import settings
 from .db import get_connection
+from .domain.calendar import month_bounds, next_month
+from .domain.commitments import (
+    commitment_due_day,
+    commitment_due_month,
+    first_commitment_occurrence,
+    next_commitment_due_date,
+    next_projected_commitment_date,
+    projected_commitment_date,
+)
+from .domain.budgets import calculate_allocation
 from .schemas import (
     BudgetAllocationMode,
     BudgetAllocationRead,
@@ -63,90 +72,6 @@ app.add_middleware(
 router = APIRouter(
     prefix="/api/v1",
 )
-
-
-def month_bounds(year: int, month: int) -> tuple[date, date]:
-    start = date(year, month, 1)
-    if month == 12:
-        end = date(year + 1, 1, 1)
-    else:
-        end = date(year, month + 1, 1)
-    return start, end
-
-
-def next_month(year: int, month: int) -> tuple[int, int]:
-    return (year + 1, 1) if month == 12 else (year, month + 1)
-
-
-def business_day_date(year: int, month: int, ordinal: int) -> date | None:
-    """Return the Nth Monday-Saturday day of a month; Sunday is excluded."""
-    business_days = 0
-    for day in range(1, monthrange(year, month)[1] + 1):
-        candidate = date(year, month, day)
-        if candidate.weekday() == 6:
-            continue
-        business_days += 1
-        if business_days == ordinal:
-            return candidate
-    return None
-
-
-def first_business_occurrence(start: date, ordinal: int) -> date | None:
-    """Find the first Nth-business-day occurrence on or after a start date."""
-    year, month = start.year, start.month
-    for _ in range(24):
-        candidate = business_day_date(year, month, ordinal)
-        if candidate and candidate >= start:
-            return candidate
-        year, month = next_month(year, month)
-    return None
-
-
-def fixed_commitment_date(year: int, month: int, due_day: int) -> date:
-    """Return a fixed billing day, clamped in shorter months."""
-    return date(year, month, min(due_day, monthrange(year, month)[1]))
-
-
-def commitment_due_day(row: dict) -> int:
-    """Read the explicit billing day, with a safe fallback for old rows."""
-    return row.get("due_day") or row["next_due_on"].day
-
-
-def commitment_due_month(row: dict) -> int:
-    """Read the explicit yearly billing month, with a legacy fallback."""
-    return row.get("due_month") or row["next_due_on"].month
-
-
-def first_fixed_occurrence(start: date, frequency: str, due_day: int, due_month: int | None = None) -> date:
-    if frequency == "monthly":
-        candidate = fixed_commitment_date(start.year, start.month, due_day)
-        if candidate < start:
-            year, month = next_month(start.year, start.month)
-            return fixed_commitment_date(year, month, due_day)
-        return candidate
-
-    candidate = fixed_commitment_date(start.year, due_month or start.month, due_day)
-    if candidate < start:
-        candidate = fixed_commitment_date(start.year + 1, due_month or start.month, due_day)
-    return candidate
-
-
-def first_commitment_occurrence(
-    start: date,
-    frequency: str,
-    due_rule: str,
-    due_day: int | None,
-    due_month: int | None,
-    business_day_number: int | None,
-) -> date | None:
-    if due_rule == "business_day":
-        if frequency == "monthly":
-            return first_business_occurrence(start, business_day_number)
-        candidate = business_day_date(start.year, due_month or start.month, business_day_number)
-        if candidate and candidate < start:
-            candidate = business_day_date(start.year + 1, due_month or start.month, business_day_number)
-        return candidate
-    return first_fixed_occurrence(start, frequency, due_day, due_month)
 
 
 def as_money(value: Decimal | None) -> Decimal:
@@ -438,10 +363,16 @@ def normalize_import_row(
     if not parsed_date:
         errors.append("Data ausente ou inválida")
 
-    if income is not None and income != 0:
+    has_income = income is not None and income != 0
+    has_expense = expense is not None and expense != 0
+    if has_income and has_expense:
+        errors.append("Entrada e saída preenchidas simultaneamente")
+        amount = None
+        direction = None
+    elif has_income:
         amount = abs(income)
         direction = "income"
-    elif expense is not None and expense != 0:
+    elif has_expense:
         amount = abs(expense)
         direction = "expense"
     elif amount is not None and amount < 0:
@@ -496,78 +427,6 @@ def read_import_sheets(filename: str, content: bytes) -> list[tuple[str, list[li
         return sheets
 
     raise HTTPException(status_code=400, detail="Use um arquivo CSV ou XLSX")
-
-
-def projected_commitment_date(row: dict, year: int, month: int) -> date | None:
-    """Return the occurrence of a commitment inside the requested month.
-
-    Recurring commitments are rules, not duplicated transaction rows. Their
-    stored due date supplies the billing day, while the dashboard projects the
-    next occurrence into the selected month.
-    """
-    baseline = row["next_due_on"]
-    target_start, _ = month_bounds(year, month)
-    baseline_start, _ = month_bounds(baseline.year, baseline.month)
-    if target_start < baseline_start:
-        return None
-
-    if row["commitment_type"] == "installment":
-        return baseline if baseline.year == year and baseline.month == month else None
-
-    if row["frequency"] == "monthly":
-        if row["due_rule"] == "business_day":
-            projected = business_day_date(year, month, row["business_day_number"])
-        else:
-            projected = fixed_commitment_date(year, month, commitment_due_day(row))
-    elif row["frequency"] == "yearly":
-        if commitment_due_month(row) != month:
-            return None
-        if row["due_rule"] == "business_day":
-            projected = business_day_date(year, month, row["business_day_number"])
-        else:
-            projected = fixed_commitment_date(year, month, commitment_due_day(row))
-    else:
-        return None
-
-    if projected is None:
-        return None
-    if projected < row["starts_on"]:
-        return None
-    if row["ends_on"] and projected > row["ends_on"]:
-        return None
-    return projected
-
-
-def next_projected_commitment_date(row: dict, from_date: date) -> date | None:
-    """Find the next visible occurrence without creating future transactions."""
-    if row["commitment_type"] == "installment":
-        return row["next_due_on"] if row["next_due_on"] >= from_date else None
-
-    year, month = from_date.year, from_date.month
-    for _ in range(24):
-        projected = projected_commitment_date(row, year, month)
-        if projected and projected >= from_date:
-            return projected
-        year, month = next_month(year, month)
-    return None
-
-
-def next_commitment_due_date(row: dict) -> date | None:
-    """Advance a commitment one occurrence after its stored due date."""
-    current = row["next_due_on"]
-    if row["frequency"] == "monthly":
-        year, month = next_month(current.year, current.month)
-        if row["due_rule"] == "business_day":
-            return business_day_date(year, month, row["business_day_number"])
-        return fixed_commitment_date(year, month, commitment_due_day(row))
-
-    if row["frequency"] == "yearly":
-        year = current.year + 1
-        if row["due_rule"] == "business_day":
-            return business_day_date(year, commitment_due_month(row), row["business_day_number"])
-        return fixed_commitment_date(year, commitment_due_month(row), commitment_due_day(row))
-
-    return None
 
 
 COMMITMENT_COLUMNS = """
@@ -985,19 +844,17 @@ def build_budget_summary(connection, user_id: UUID, year: int, month: int) -> di
     allocations = []
     allocated_amount = Decimal("0.00")
     for row in allocation_rows:
-        if row["allocation_mode"] == BudgetAllocationMode.FIXED_AMOUNT:
-            fixed_amount = as_money(row["fixed_amount"])
-            target_amount = fixed_amount
-            percentage = (
-                target_amount * Decimal("100") / base_amount
-            ).quantize(Decimal("0.01")) if base_amount > 0 else Decimal("0.00")
-        else:
-            fixed_amount = None
-            percentage = Decimal(row["percentage"])
-            target_amount = (
-                base_amount * percentage / Decimal("100")
-            ).quantize(Decimal("0.01"))
-        actual_amount = as_money(row["actual_amount"])
+        calculation = calculate_allocation(
+            base_amount,
+            row["allocation_mode"],
+            row["percentage"],
+            row["fixed_amount"],
+            row["actual_amount"],
+        )
+        fixed_amount = calculation["fixed_amount"]
+        percentage = calculation["percentage"]
+        target_amount = calculation["target_amount"]
+        actual_amount = calculation["actual_amount"]
         allocated_amount += target_amount
         allocations.append(
             BudgetAllocationRead(
