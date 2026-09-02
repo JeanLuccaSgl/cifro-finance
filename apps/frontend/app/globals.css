@@ -255,6 +255,7 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .budgetBaseForm .secondaryButton, .allocationCreate .confirmButton { min-height: 42px; white-space: nowrap; }
 .allocationSection { margin-top: 62px; }
 .baseSourceHint { grid-column: 1 / -1; margin: 0; color: #7d8aa3; font-size: 10px; line-height: 1.55; }
+.seeAll.exceeded { color: #e29aa0; }
 .allocationCreate { display: grid; grid-template-columns: minmax(220px, 1fr) 170px 150px auto; gap: 14px; align-items: end; padding: 20px 0; border-bottom: 1px solid var(--line); }
 .allocationCreate .confirmButton { grid-column: 4; grid-row: 1; }
 .percentageField > div { position: relative; }
@@ -266,6 +267,10 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.6px; }
 .allocationPreview { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 18px; min-height: 40px; padding: 11px 13px; border-left: 2px solid var(--blue-bright); background: rgba(118, 149, 255, .055); }
 .allocationPreview span { color: #748099; font-size: 9px; text-transform: uppercase; letter-spacing: .9px; }
 .allocationPreview strong { color: #bdc9ff; font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; text-align: right; }
+.allocationPreview em { color: #e29aa0; font-style: normal; }
+.budgetOverflowNotice { display: grid; gap: 5px; margin: 16px 0 0; padding: 12px 13px; border-left: 2px solid #c97d83; background: rgba(201, 125, 131, .07); }
+.budgetOverflowNotice strong { color: #e29aa0; font-size: 11px; }
+.budgetOverflowNotice span { color: #bd9298; font-size: 10px; line-height: 1.5; }
 .allocationList { display: grid; }
 .allocationRow { display: grid; grid-template-columns: minmax(190px, 1fr) 210px 140px auto; align-items: center; gap: 16px; padding: 18px 0 14px; border-bottom: 1px solid var(--line-soft); }
 .allocationIdentity { display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: center; gap: 11px; min-width: 0; }

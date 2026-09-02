@@ -1145,6 +1145,9 @@ function BudgetView({ session, accountName, onLogout }) {
   const totalPercentage = Number(budget?.total_percentage || 0);
   const baseAmount = Number(budget?.base_amount || 0);
   const allocatedAmount = Number(budget?.allocated_amount || 0);
+  const unallocatedAmount = Number(budget?.unallocated_amount || 0);
+  const unallocatedPercentage = Number(budget?.unallocated_percentage || 0);
+  const isOverBase = unallocatedAmount < -0.005;
   const periodQuery = `?year=${selectedPeriod.year}&month=${selectedPeriod.month}`;
 
   function allocationPreview(mode, value) {
@@ -1212,11 +1215,6 @@ function BudgetView({ session, accountName, onLogout }) {
       setNotice("O percentual não pode passar de 100%.");
       return;
     }
-    if (baseAmount > 0 && allocatedAmount + newPreview.amount > baseAmount + 0.001) {
-      setNotice(`Restam ${formatCurrency(Math.max(0, baseAmount - allocatedAmount))} na base deste mês.`);
-      return;
-    }
-
     setBusyAction("new");
     setNotice("");
     try {
@@ -1361,7 +1359,7 @@ function BudgetView({ session, accountName, onLogout }) {
             <section className="allocationSection" aria-labelledby="allocation-title">
               <div className="sectionHeader">
                 <div><p className="eyebrow">FRAÇÕES</p><h2 id="allocation-title">Como você quer dividir.</h2></div>
-                <span className="seeAll">{loading ? "Carregando" : `${totalPercentage.toLocaleString("pt-BR")}% de 100%`}</span>
+                <span className={totalPercentage > 100 ? "seeAll exceeded" : "seeAll"}>{loading ? "Carregando" : `${totalPercentage.toLocaleString("pt-BR")}% ${totalPercentage > 100 ? "acima da base" : "da base"}`}</span>
               </div>
 
               <form className="allocationCreate" onSubmit={addAllocation}>
@@ -1400,12 +1398,21 @@ function BudgetView({ session, accountName, onLogout }) {
                     {newAllocation.mode === "fixed_amount"
                       ? `${formatCurrency(newPreview.amount)} = ${newPreview.percentage.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% da base`
                       : `${newPreview.percentage.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% = ${formatCurrency(newPreview.amount)}`}
+                    {baseAmount > 0 && allocatedAmount + newPreview.amount > baseAmount && (
+                      <em> · total ficará acima da base</em>
+                    )}
                   </strong>
                 </div>
                 <button className="confirmButton" type="submit" disabled={busyAction === "new" || availableCategories.length === 0}>{busyAction === "new" ? "Adicionando..." : "Adicionar fração"}</button>
               </form>
 
               {notice && <p className="notice" role="status">{notice}</p>}
+              {isOverBase && (
+                <div className="budgetOverflowNotice" role="status">
+                  <strong>Distribuição acima da base</strong>
+                  <span>{formatCurrency(Math.abs(unallocatedAmount))} acima do valor disponível · {Math.abs(unallocatedPercentage).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% excedente.</span>
+                </div>
+              )}
 
               <div className="allocationList">
                 {!loading && budget?.allocations.length === 0 ? (

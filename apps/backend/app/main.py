@@ -1188,33 +1188,6 @@ def update_budget_allocation(
                 selected_year,
                 selected_month,
             )
-            summary = build_budget_summary(
-                connection,
-                user_id,
-                selected_year,
-                selected_month,
-            )
-            other_total = sum(
-                (
-                    allocation.target_amount
-                    for allocation in summary["allocations"]
-                    if allocation.category_id != category_id
-                ),
-                Decimal("0.00"),
-            )
-            if payload.allocation_mode == BudgetAllocationMode.FIXED_AMOUNT:
-                target_amount = as_money(payload.fixed_amount)
-            else:
-                target_amount = (
-                    summary["base_amount"] * payload.percentage / Decimal("100")
-                ).quantize(Decimal("0.01"))
-            if summary["base_amount"] > 0 and other_total + target_amount > summary["base_amount"]:
-                available = max(Decimal("0.00"), summary["base_amount"] - other_total)
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Restam apenas R$ {available:.2f} na base da distribuição",
-                )
-
             connection.execute(
                 """
                 insert into public.budget_month_allocations (
