@@ -28,6 +28,7 @@ from .domain.commitments import (
     projected_commitment_date,
 )
 from .domain.budgets import calculate_allocation
+from .domain.simulations import calculate_simulation_totals
 from .schemas import (
     BudgetAllocationMode,
     BudgetAllocationRead,
@@ -49,6 +50,16 @@ from .schemas import (
     DashboardPeriod,
     DashboardRead,
     Direction,
+    SimulationCreate,
+    SimulationCategoryTotal,
+    SimulationItemCreate,
+    SimulationItemUpdate,
+    SimulationMove,
+    SimulationPlanningImport,
+    SimulationPlanningOptionRead,
+    SimulationRead,
+    SimulationSummaryRead,
+    SimulationUpdate,
     TransactionCreate,
     TransactionRead,
     TransactionUpdate,
@@ -2043,6 +2054,489 @@ def delete_transaction(transaction_id: UUID, user_id: UUID = Depends(current_use
 
     if not row:
         raise HTTPException(status_code=404, detail="Transaction not found")
+
+
+SIMULATION_COLUMNS = """
+  s.id, s.user_id, s.name, s.reference, s.created_at, s.updated_at
+"""
+
+
+def get_simulation(connection, simulation_id: UUID, user_id: UUID) -> dict:
+    simulation = connection.execute(
+        f"""
+        select {SIMULATION_COLUMNS}
+        from public.simulations s
+        where s.id = %s and s.user_id = %s
+        """,
+        (simulation_id, user_id),
+    ).fetchone()
+    if not simulation:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return simulation
+
+
+def validate_simulation_category(
+    connection,
+    category_id: UUID | None,
+    user_id: UUID,
+) -> dict | None:
+    if category_id is None:
+        return None
+    category = connection.execute(
+        """
+        select id, name, is_active
+        from public.categories
+        where id = %s and user_id = %s
+        """,
+        (category_id, user_id),
+    ).fetchone()
+    if not category or not category["is_active"]:
+        raise HTTPException(status_code=400, detail="Category not found or inactive")
+    return category
+
+
+def simulation_items(connection, simulation_id: UUID, user_id: UUID) -> list[dict]:
+    return list(connection.execute(
+        """
+        select
+          si.id, si.simulation_id, si.user_id, si.position, si.description,
+          si.direction, si.amount, si.category_id, si.source,
+          si.created_at, si.updated_at, c.name as category_name
+        from public.simulation_items si
+        left join public.categories c
+          on c.id = si.category_id and c.user_id = si.user_id
+        where si.simulation_id = %s and si.user_id = %s
+        order by si.position asc, si.created_at asc, si.id asc
+        """,
+        (simulation_id, user_id),
+    ).fetchall())
+
+
+def build_simulation(connection, simulation_id: UUID, user_id: UUID) -> dict:
+    simulation = dict(get_simulation(connection, simulation_id, user_id))
+    items = simulation_items(connection, simulation_id, user_id)
+    totals = calculate_simulation_totals(items)
+    totals["expenses_by_category"] = [
+        SimulationCategoryTotal(**row) for row in totals["expenses_by_category"]
+    ]
+    simulation.update(
+        {
+            "items": items,
+            "totals": totals,
+            "item_count": len(items),
+            "total_income": totals["total_income"],
+            "total_expenses": totals["total_expenses"],
+            "final_balance": totals["final_balance"],
+        }
+    )
+    return simulation
+
+
+def touch_simulation(connection, simulation_id: UUID, user_id: UUID) -> None:
+    connection.execute(
+        """
+        update public.simulations
+        set updated_at = now()
+        where id = %s and user_id = %s
+        """,
+        (simulation_id, user_id),
+    )
+
+
+def normalize_simulation_positions(connection, simulation_id: UUID, user_id: UUID, item_ids: list[UUID] | None = None) -> None:
+    if item_ids is None:
+        rows = connection.execute(
+            """
+            select id
+            from public.simulation_items
+            where simulation_id = %s and user_id = %s
+            order by position asc, created_at asc, id asc
+            """,
+            (simulation_id, user_id),
+        ).fetchall()
+        item_ids = [row["id"] for row in rows]
+
+    connection.execute(
+        """
+        update public.simulation_items
+        set position = position + 1000000
+        where simulation_id = %s and user_id = %s
+        """,
+        (simulation_id, user_id),
+    )
+    for position, current_item_id in enumerate(item_ids):
+        connection.execute(
+            """
+            update public.simulation_items
+            set position = %s
+            where id = %s and simulation_id = %s and user_id = %s
+            """,
+            (position, current_item_id, simulation_id, user_id),
+        )
+
+
+def reorder_simulation_items(connection, simulation_id: UUID, user_id: UUID, item_id: UUID, move: str) -> None:
+    rows = connection.execute(
+        """
+        select id
+        from public.simulation_items
+        where simulation_id = %s and user_id = %s
+        order by position asc, created_at asc, id asc
+        """,
+        (simulation_id, user_id),
+    ).fetchall()
+    item_ids = [row["id"] for row in rows]
+    if item_id not in item_ids:
+        raise HTTPException(status_code=404, detail="Simulation item not found")
+
+    current_index = item_ids.index(item_id)
+    target_index = current_index - 1 if move == "up" else current_index + 1
+    if target_index < 0 or target_index >= len(item_ids):
+        return
+
+    item_ids[current_index], item_ids[target_index] = item_ids[target_index], item_ids[current_index]
+    normalize_simulation_positions(connection, simulation_id, user_id, item_ids)
+
+
+@router.get("/simulations", response_model=list[SimulationSummaryRead])
+def list_simulations(user_id: UUID = Depends(current_user_id)) -> list[dict]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            select
+              s.id, s.name, s.reference, s.created_at, s.updated_at,
+              count(si.id)::integer as item_count,
+              coalesce(sum(case when si.direction = 'income' then si.amount else 0 end), 0) as total_income,
+              coalesce(sum(case when si.direction = 'expense' then si.amount else 0 end), 0) as total_expenses
+            from public.simulations s
+            left join public.simulation_items si
+              on si.simulation_id = s.id and si.user_id = s.user_id
+            where s.user_id = %s
+            group by s.id, s.name, s.reference, s.created_at, s.updated_at
+            order by s.updated_at desc, s.created_at desc
+            """,
+            (user_id,),
+        ).fetchall()
+    results = []
+    for row in rows:
+        result = dict(row)
+        result["final_balance"] = result["total_income"] - result["total_expenses"]
+        results.append(result)
+    return results
+
+
+@router.post("/simulations", response_model=SimulationRead, status_code=status.HTTP_201_CREATED)
+def create_simulation(payload: SimulationCreate, user_id: UUID = Depends(current_user_id)) -> dict:
+    with get_connection() as connection:
+        simulation = connection.execute(
+            """
+            insert into public.simulations (user_id, name, reference)
+            values (%s, %s, %s)
+            returning id
+            """,
+            (user_id, payload.name, payload.reference),
+        ).fetchone()
+        return build_simulation(connection, simulation["id"], user_id)
+
+
+@router.get("/simulations/{simulation_id}", response_model=SimulationRead)
+def read_simulation(simulation_id: UUID, user_id: UUID = Depends(current_user_id)) -> dict:
+    with get_connection() as connection:
+        return build_simulation(connection, simulation_id, user_id)
+
+
+@router.patch("/simulations/{simulation_id}", response_model=SimulationRead)
+def update_simulation(
+    simulation_id: UUID,
+    payload: SimulationUpdate,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    values = payload.model_dump(exclude_unset=True)
+    if not values:
+        raise HTTPException(status_code=400, detail="No simulation changes provided")
+    if "name" in values and values["name"] is None:
+        raise HTTPException(status_code=400, detail="Simulation name cannot be empty")
+
+    assignments = []
+    parameters = []
+    for field in ("name", "reference"):
+        if field in values:
+            assignments.append(f"{field} = %s")
+            parameters.append(values[field])
+    parameters.extend([simulation_id, user_id])
+
+    with get_connection() as connection:
+        row = connection.execute(
+            f"""
+            update public.simulations
+            set {', '.join(assignments)}, updated_at = now()
+            where id = %s and user_id = %s
+            returning id
+            """,
+            parameters,
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Simulation not found")
+        return build_simulation(connection, simulation_id, user_id)
+
+
+@router.post("/simulations/{simulation_id}/duplicate", response_model=SimulationRead, status_code=status.HTTP_201_CREATED)
+def duplicate_simulation(simulation_id: UUID, user_id: UUID = Depends(current_user_id)) -> dict:
+    with get_connection() as connection:
+        original = get_simulation(connection, simulation_id, user_id)
+        copied_name = f"{original['name']} (cópia)"[:120]
+        copy = connection.execute(
+            """
+            insert into public.simulations (user_id, name, reference)
+            values (%s, %s, %s)
+            returning id
+            """,
+            (user_id, copied_name, original["reference"]),
+        ).fetchone()
+        connection.execute(
+            """
+            insert into public.simulation_items (
+              simulation_id, user_id, position, description, direction,
+              amount, category_id, source
+            )
+            select %s, user_id, position, description, direction,
+              amount, category_id, source
+            from public.simulation_items
+            where simulation_id = %s and user_id = %s
+            """,
+            (copy["id"], simulation_id, user_id),
+        )
+        return build_simulation(connection, copy["id"], user_id)
+
+
+@router.delete("/simulations/{simulation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_simulation(simulation_id: UUID, user_id: UUID = Depends(current_user_id)) -> None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            delete from public.simulations
+            where id = %s and user_id = %s
+            returning id
+            """,
+            (simulation_id, user_id),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+
+
+@router.post("/simulations/{simulation_id}/items", response_model=SimulationRead, status_code=status.HTTP_201_CREATED)
+def create_simulation_item(
+    simulation_id: UUID,
+    payload: SimulationItemCreate,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    with get_connection() as connection:
+        get_simulation(connection, simulation_id, user_id)
+        validate_simulation_category(connection, payload.category_id, user_id)
+        position = connection.execute(
+            """
+            select coalesce(max(position) + 1, 0) as next_position
+            from public.simulation_items
+            where simulation_id = %s and user_id = %s
+            """,
+            (simulation_id, user_id),
+        ).fetchone()["next_position"]
+        connection.execute(
+            """
+            insert into public.simulation_items (
+              simulation_id, user_id, position, description, direction,
+              amount, category_id, source
+            )
+            values (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                simulation_id,
+                user_id,
+                position,
+                payload.description,
+                payload.direction.value,
+                payload.amount,
+                payload.category_id,
+                payload.source.value,
+            ),
+        )
+        touch_simulation(connection, simulation_id, user_id)
+        return build_simulation(connection, simulation_id, user_id)
+
+
+@router.patch("/simulations/{simulation_id}/items/{item_id}", response_model=SimulationRead)
+def update_simulation_item(
+    simulation_id: UUID,
+    item_id: UUID,
+    payload: SimulationItemUpdate,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    values = payload.model_dump(exclude_unset=True)
+    if not values:
+        raise HTTPException(status_code=400, detail="No simulation item changes provided")
+    if any(field in values and values[field] is None for field in ("description", "direction", "amount")):
+        raise HTTPException(status_code=400, detail="Description, direction and amount cannot be empty")
+
+    assignments = []
+    parameters = []
+    for field in ("description", "direction", "amount", "category_id"):
+        if field not in values:
+            continue
+        value = values[field]
+        assignments.append(f"{field} = %s")
+        parameters.append(value.value if isinstance(value, Direction) else value)
+
+    with get_connection() as connection:
+        get_simulation(connection, simulation_id, user_id)
+        current = connection.execute(
+            """
+            select id
+            from public.simulation_items
+            where id = %s and simulation_id = %s and user_id = %s
+            """,
+            (item_id, simulation_id, user_id),
+        ).fetchone()
+        if not current:
+            raise HTTPException(status_code=404, detail="Simulation item not found")
+        if "category_id" in values:
+            validate_simulation_category(connection, values["category_id"], user_id)
+        parameters.extend([item_id, simulation_id, user_id])
+        connection.execute(
+            f"""
+            update public.simulation_items
+            set {', '.join(assignments)}, updated_at = now()
+            where id = %s and simulation_id = %s and user_id = %s
+            """,
+            parameters,
+        )
+        touch_simulation(connection, simulation_id, user_id)
+        return build_simulation(connection, simulation_id, user_id)
+
+
+@router.delete("/simulations/{simulation_id}/items/{item_id}", response_model=SimulationRead)
+def delete_simulation_item(
+    simulation_id: UUID,
+    item_id: UUID,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    with get_connection() as connection:
+        get_simulation(connection, simulation_id, user_id)
+        row = connection.execute(
+            """
+            delete from public.simulation_items
+            where id = %s and simulation_id = %s and user_id = %s
+            returning id
+            """,
+            (item_id, simulation_id, user_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Simulation item not found")
+        normalize_simulation_positions(connection, simulation_id, user_id)
+        touch_simulation(connection, simulation_id, user_id)
+        return build_simulation(connection, simulation_id, user_id)
+
+
+@router.post("/simulations/{simulation_id}/items/{item_id}/move", response_model=SimulationRead)
+def move_simulation_item(
+    simulation_id: UUID,
+    item_id: UUID,
+    payload: SimulationMove,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    with get_connection() as connection:
+        get_simulation(connection, simulation_id, user_id)
+        reorder_simulation_items(connection, simulation_id, user_id, item_id, payload.direction)
+        touch_simulation(connection, simulation_id, user_id)
+        return build_simulation(connection, simulation_id, user_id)
+
+
+@router.get("/simulations/{simulation_id}/planning-options", response_model=list[SimulationPlanningOptionRead])
+def list_simulation_planning_options(
+    simulation_id: UUID,
+    user_id: UUID = Depends(current_user_id),
+) -> list[dict]:
+    with get_connection() as connection:
+        get_simulation(connection, simulation_id, user_id)
+        rows = connection.execute(
+            """
+            select
+              c.id, c.name, c.amount, c.direction, c.commitment_type,
+              c.frequency, c.due_rule, c.due_day, c.due_month,
+              c.business_day_number, c.starts_on, c.next_due_on, c.ends_on,
+              c.category_id, cat.name as category_name
+            from public.commitments c
+            left join public.categories cat
+              on cat.id = c.category_id and cat.user_id = c.user_id
+            where c.user_id = %s and c.is_active = true
+            order by c.next_due_on asc, c.name asc
+            """,
+            (user_id,),
+        ).fetchall()
+
+    options = []
+    for row in rows:
+        projected_date = next_projected_commitment_date(row, date.today())
+        if projected_date is None and row["commitment_type"] == "installment":
+            projected_date = row["next_due_on"]
+        if projected_date is None:
+            continue
+        option = dict(row)
+        option["next_due_on"] = projected_date
+        options.append(option)
+    return options
+
+
+@router.post("/simulations/{simulation_id}/items/from-planning", response_model=SimulationRead)
+def import_simulation_planning_items(
+    simulation_id: UUID,
+    payload: SimulationPlanningImport,
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    if len(set(payload.commitment_ids)) != len(payload.commitment_ids):
+        raise HTTPException(status_code=400, detail="Planning items cannot be selected more than once")
+
+    with get_connection() as connection:
+        get_simulation(connection, simulation_id, user_id)
+        for commitment_id in payload.commitment_ids:
+            commitment = connection.execute(
+                """
+                select id, name, amount, direction, category_id
+                from public.commitments
+                where id = %s and user_id = %s and is_active = true
+                """,
+                (commitment_id, user_id),
+            ).fetchone()
+            if not commitment:
+                raise HTTPException(status_code=400, detail="One or more planning items are unavailable")
+            validate_simulation_category(connection, commitment["category_id"], user_id)
+            position = connection.execute(
+                """
+                select coalesce(max(position) + 1, 0) as next_position
+                from public.simulation_items
+                where simulation_id = %s and user_id = %s
+                """,
+                (simulation_id, user_id),
+            ).fetchone()["next_position"]
+            connection.execute(
+                """
+                insert into public.simulation_items (
+                  simulation_id, user_id, position, description, direction,
+                  amount, category_id, source
+                )
+                values (%s, %s, %s, %s, %s, %s, %s, 'planning')
+                """,
+                (
+                    simulation_id,
+                    user_id,
+                    position,
+                    commitment["name"],
+                    commitment["direction"],
+                    commitment["amount"],
+                    commitment["category_id"],
+                ),
+            )
+        touch_simulation(connection, simulation_id, user_id)
+        return build_simulation(connection, simulation_id, user_id)
 
 
 @router.get("/dashboard", response_model=DashboardRead)

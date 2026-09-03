@@ -263,6 +263,7 @@ function Sidebar({ active, accountName, onLogout }) {
         <Link className={active === "dashboard" ? "navItem active" : "navItem"} href="/">Visão geral</Link>
         <Link className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</Link>
         <Link className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejamento</Link>
+        <Link className={active === "simulator" ? "navItem active" : "navItem"} href="/simulador">Simulador</Link>
         <Link className={active === "budget" ? "navItem active" : "navItem"} href="/distribuicao">Distribuição</Link>
         <Link className={active === "categories" ? "navItem active" : "navItem"} href="/categorias">Categorias</Link>
         <Link className={active === "data" ? "navItem active" : "navItem"} href="/dados">Dados</Link>
@@ -278,6 +279,349 @@ function Sidebar({ active, accountName, onLogout }) {
         <button className="moreButton" type="button" onClick={onLogout} aria-label="Sair">sair</button>
       </div>
     </aside>
+  );
+}
+
+function SimulatorView({ session, accountName, onLogout }) {
+  const [simulations, setSimulations] = useState([]);
+  const [simulation, setSimulation] = useState(null);
+  const [categories, setCategories] = useState([]);
+  const [planningOptions, setPlanningOptions] = useState([]);
+  const [selectedPlanningIds, setSelectedPlanningIds] = useState([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newReference, setNewReference] = useState("");
+  const [itemForm, setItemForm] = useState({ description: "", direction: "expense", amount: "", category_id: "" });
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  async function loadSimulations(preferredId = selectedId) {
+    const data = await apiRequest("/api/v1/simulations", session);
+    setSimulations(data);
+    const nextId = preferredId && data.some((item) => item.id === preferredId) ? preferredId : data[0]?.id || "";
+    setSelectedId(nextId);
+    if (!nextId) setSimulation(null);
+  }
+
+  async function loadSimulation(id = selectedId) {
+    if (!id) return;
+    const [data, options] = await Promise.all([
+      apiRequest(`/api/v1/simulations/${id}`, session),
+      apiRequest(`/api/v1/simulations/${id}/planning-options`, session),
+    ]);
+    setSimulation(data);
+    setPlanningOptions(options);
+    setSelectedPlanningIds([]);
+  }
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      setLoading(true);
+      try {
+        const [simulationData, categoryData] = await Promise.all([
+          apiRequest("/api/v1/simulations", session),
+          apiRequest("/api/v1/categories", session),
+        ]);
+        if (!active) return;
+        setSimulations(simulationData);
+        setCategories(categoryData);
+        const firstId = simulationData[0]?.id || "";
+        setSelectedId(firstId);
+        if (firstId) {
+          const [detail, options] = await Promise.all([
+            apiRequest(`/api/v1/simulations/${firstId}`, session),
+            apiRequest(`/api/v1/simulations/${firstId}/planning-options`, session),
+          ]);
+          if (!active) return;
+          setSimulation(detail);
+          setPlanningOptions(options);
+        }
+      } catch (error) {
+        if (active) setNotice(error.message);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    load();
+    return () => { active = false; };
+  }, [session]);
+
+  async function selectSimulation(id) {
+    setSelectedId(id);
+    setNotice("");
+    try {
+      await loadSimulation(id);
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }
+
+  async function createSimulation(event) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      const created = await apiRequest("/api/v1/simulations", session, {
+        method: "POST",
+        body: JSON.stringify({ name: newName.trim() || "Nova simulação", reference: newReference.trim() || null }),
+      });
+      setNewName("");
+      setNewReference("");
+      setSimulation(created);
+      setSelectedId(created.id);
+      setSimulations((current) => [created, ...current]);
+      const options = await apiRequest(`/api/v1/simulations/${created.id}/planning-options`, session);
+      setPlanningOptions(options);
+      setNotice("Simulação criada e salva");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveSimulationDetails(event) {
+    event.preventDefault();
+    if (!simulation) return;
+    setSaving(true);
+    try {
+      const updated = await apiRequest(`/api/v1/simulations/${simulation.id}`, session, {
+        method: "PATCH",
+        body: JSON.stringify({ name: simulation.name.trim(), reference: simulation.reference?.trim() || null }),
+      });
+      setSimulation(updated);
+      setSimulations((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setNotice("Simulação salva");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function duplicateSimulation() {
+    if (!simulation) return;
+    setSaving(true);
+    try {
+      const copy = await apiRequest(`/api/v1/simulations/${simulation.id}/duplicate`, session, { method: "POST" });
+      setSimulations((current) => [copy, ...current]);
+      setSimulation(copy);
+      setSelectedId(copy.id);
+      const options = await apiRequest(`/api/v1/simulations/${copy.id}/planning-options`, session);
+      setPlanningOptions(options);
+      setNotice("Simulação duplicada");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteSimulation() {
+    if (!simulation || !window.confirm(`Excluir “${simulation.name}”? Essa simulação e seus itens serão removidos.`)) return;
+    setSaving(true);
+    try {
+      await apiRequest(`/api/v1/simulations/${simulation.id}`, session, { method: "DELETE" });
+      const remaining = simulations.filter((item) => item.id !== simulation.id);
+      setSimulations(remaining);
+      setSelectedId(remaining[0]?.id || "");
+      if (remaining[0]) await loadSimulation(remaining[0].id);
+      else setSimulation(null);
+      setNotice("Simulação excluída");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function updateItemForm(field, value) {
+    setItemForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function resetItemForm() {
+    setItemForm({ description: "", direction: "expense", amount: "", category_id: "" });
+    setEditingItemId(null);
+  }
+
+  async function saveItem(event) {
+    event.preventDefault();
+    if (!simulation) return;
+    const amount = Number(String(itemForm.amount).replace(",", "."));
+    if (!itemForm.description.trim() || !Number.isFinite(amount) || amount <= 0) {
+      setNotice("Informe uma descrição e um valor positivo.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        description: itemForm.description.trim(),
+        direction: itemForm.direction,
+        amount,
+        category_id: itemForm.category_id || null,
+      };
+      const path = editingItemId
+        ? `/api/v1/simulations/${simulation.id}/items/${editingItemId}`
+        : `/api/v1/simulations/${simulation.id}/items`;
+      const updated = await apiRequest(path, session, {
+        method: editingItemId ? "PATCH" : "POST",
+        body: JSON.stringify(payload),
+      });
+      setSimulation(updated);
+      setSimulations((current) => current.map((item) => item.id === updated.id ? updated : item));
+      resetItemForm();
+      setNotice(editingItemId ? "Item atualizado" : "Item salvo");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function editItem(item) {
+    setEditingItemId(item.id);
+    setItemForm({ description: item.description, direction: item.direction, amount: String(item.amount), category_id: item.category_id || "" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function removeItem(item) {
+    if (!simulation || !window.confirm(`Remover “${item.description}” da simulação?`)) return;
+    setSaving(true);
+    try {
+      const updated = await apiRequest(`/api/v1/simulations/${simulation.id}/items/${item.id}`, session, { method: "DELETE" });
+      setSimulation(updated);
+      setSimulations((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
+      if (editingItemId === item.id) resetItemForm();
+      setNotice("Item removido");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function moveItem(item, direction) {
+    if (!simulation) return;
+    setSaving(true);
+    try {
+      const updated = await apiRequest(`/api/v1/simulations/${simulation.id}/items/${item.id}/move`, session, {
+        method: "POST",
+        body: JSON.stringify({ direction }),
+      });
+      setSimulation(updated);
+      setSimulations((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addPlanningItems() {
+    if (!simulation || selectedPlanningIds.length === 0) return;
+    setSaving(true);
+    try {
+      const updated = await apiRequest(`/api/v1/simulations/${simulation.id}/items/from-planning`, session, {
+        method: "POST",
+        body: JSON.stringify({ commitment_ids: selectedPlanningIds }),
+      });
+      setSimulation(updated);
+      setSimulations((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
+      setSelectedPlanningIds([]);
+      setNotice("Itens do planejamento copiados como uma fotografia independente");
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const totalIncome = Number(simulation?.totals?.total_income || 0);
+  const totalExpenses = Number(simulation?.totals?.total_expenses || 0);
+  const finalBalance = Number(simulation?.totals?.final_balance || 0);
+  let runningBalance = 0;
+
+  return (
+    <main className="shell">
+      <Sidebar active="simulator" accountName={accountName} onLogout={onLogout} />
+      <section className="content simulatorContent">
+        <header className="topbar">
+          <div><p className="eyebrow">CALCULADORA DE CENÁRIOS</p><h1>Veja antes de decidir.</h1></div>
+          <span className="saveStatus">{saving ? "Salvando" : simulation ? "Salvo" : "Nenhum cenário"}</span>
+        </header>
+
+        <div className="simulatorLayout">
+          <div className="simulatorMain">
+            <section className="simulatorIntro">
+              <p className="eyebrow">SIMULADOR</p>
+              <h2>Monte uma possibilidade e acompanhe o saldo.</h2>
+              <p>Adicione entradas e saídas na ordem em que você imagina que acontecerão. Nada aqui altera seus registros reais ou o planejamento.</p>
+            </section>
+
+            {!simulation ? (
+              <form className="simulatorCreate" onSubmit={createSimulation}>
+                <div><label htmlFor="new-simulation-name">Nome do cenário</label><input id="new-simulation-name" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Ex.: Comprar notebook" maxLength={120} /></div>
+                <div><label htmlFor="new-simulation-reference">Referência opcional</label><input id="new-simulation-reference" value={newReference} onChange={(event) => setNewReference(event.target.value)} placeholder="Ex.: Setembro ou objetivo" maxLength={120} /></div>
+                <button className="confirmButton" type="submit" disabled={saving}>{saving ? "Criando..." : "Nova simulação"}</button>
+              </form>
+            ) : (
+              <>
+                <form className="simulatorMeta" onSubmit={saveSimulationDetails}>
+                  <div><label htmlFor="simulation-name">Cenário</label><input id="simulation-name" value={simulation.name} onChange={(event) => setSimulation((current) => ({ ...current, name: event.target.value }))} maxLength={120} /></div>
+                  <div><label htmlFor="simulation-reference">Referência</label><input id="simulation-reference" value={simulation.reference || ""} onChange={(event) => setSimulation((current) => ({ ...current, reference: event.target.value }))} placeholder="Ex.: próximo mês" maxLength={120} /></div>
+                  <div className="simulatorMetaActions"><button className="secondaryButton" type="submit" disabled={saving}>Salvar</button><button className="secondaryButton" type="button" onClick={duplicateSimulation} disabled={saving}>Duplicar</button><button className="dangerButton" type="button" onClick={deleteSimulation} disabled={saving}>Excluir</button></div>
+                </form>
+
+                <section className="simulatorSection" aria-labelledby="simulator-item-title">
+                  <div className="sectionHeader"><div><p className="eyebrow">NOVO ITEM</p><h2 id="simulator-item-title">O que entra nessa conta?</h2></div><span className="seeAll">{editingItemId ? "Editando item" : "Salvo automaticamente"}</span></div>
+                  <form className="simulatorItemForm" onSubmit={saveItem}>
+                    <div className="simulatorField simulatorDescription"><label htmlFor="simulation-item-description">Descrição</label><input id="simulation-item-description" value={itemForm.description} onChange={(event) => updateItemForm("description", event.target.value)} placeholder="Ex.: Salário, aluguel ou compra" maxLength={160} required /></div>
+                    <div className="simulatorField"><label htmlFor="simulation-item-direction">Tipo</label><select id="simulation-item-direction" value={itemForm.direction} onChange={(event) => updateItemForm("direction", event.target.value)}><option value="income">Entrada</option><option value="expense">Saída</option></select></div>
+                    <div className="simulatorField"><label htmlFor="simulation-item-amount">Valor</label><input id="simulation-item-amount" type="number" min="0.01" step="0.01" value={itemForm.amount} onChange={(event) => updateItemForm("amount", event.target.value)} placeholder="0,00" required /></div>
+                    <div className="simulatorField"><label htmlFor="simulation-item-category">Categoria opcional</label><select id="simulation-item-category" value={itemForm.category_id} onChange={(event) => updateItemForm("category_id", event.target.value)}><option value="">Sem categoria</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></div>
+                    <div className="simulatorFormActions"><button className="confirmButton" type="submit" disabled={saving}>{editingItemId ? "Salvar item" : "Adicionar item"}</button>{editingItemId && <button className="secondaryButton" type="button" onClick={resetItemForm}>Cancelar</button>}</div>
+                  </form>
+                </section>
+
+                <section className="simulatorSection" aria-labelledby="simulator-items-title">
+                  <div className="sectionHeader"><div><p className="eyebrow">ORDEM DO CENÁRIO</p><h2 id="simulator-items-title">Itens da simulação</h2></div><span className="seeAll">{simulation.items.length} itens</span></div>
+                  {simulation.items.length === 0 ? <p className="emptyState">Adicione uma entrada ou saída para começar a enxergar o saldo.</p> : (
+                    <div className="simulationItemList">{simulation.items.map((item, index) => {
+                      runningBalance += item.direction === "income" ? Number(item.amount) : -Number(item.amount);
+                      return <article className="simulationItem" key={item.id}>
+                        <span className={`simulationItemNumber ${item.direction}`}>{String(index + 1).padStart(2, "0")}</span>
+                        <div className="simulationItemInfo"><strong>{item.description}</strong><span>{item.category_name || "Sem categoria"} · {item.source === "planning" ? "Planejamento" : "Manual"}</span></div>
+                        <b className={item.direction}>{item.direction === "income" ? "+" : "−"} {formatCurrency(item.amount)}</b>
+                        <span className={runningBalance < 0 ? "simulationBalance negative" : "simulationBalance"}>{formatCurrency(runningBalance)}</span>
+                        <div className="simulationItemActions"><button type="button" onClick={() => moveItem(item, "up")} disabled={saving || index === 0} aria-label="Mover item para cima">↑</button><button type="button" onClick={() => moveItem(item, "down")} disabled={saving || index === simulation.items.length - 1} aria-label="Mover item para baixo">↓</button><button type="button" onClick={() => editItem(item)} disabled={saving}>Editar</button><button type="button" onClick={() => removeItem(item)} disabled={saving}>Excluir</button></div>
+                      </article>;
+                    })}</div>
+                  )}
+                </section>
+
+                <section className="simulatorSection" aria-labelledby="planning-copy-title">
+                  <div className="sectionHeader"><div><p className="eyebrow">ORIGEM OPCIONAL</p><h2 id="planning-copy-title">Adicionar do planejamento</h2></div><span className="seeAll">Cópia independente</span></div>
+                  {planningOptions.length === 0 ? <p className="emptyState">Nenhum compromisso ativo disponível para copiar.</p> : <>
+                    <div className="planningOptionList">{planningOptions.map((option) => <label className="planningOption" key={option.id}><input type="checkbox" checked={selectedPlanningIds.includes(option.id)} onChange={(event) => setSelectedPlanningIds((current) => event.target.checked ? [...current, option.id] : current.filter((id) => id !== option.id))} /><span><strong>{option.name}</strong><small>{formatDate(option.next_due_on)} · {option.category_name || "Sem categoria"}</small></span><b className={option.direction}>{option.direction === "income" ? "+" : "−"} {formatCurrency(option.amount)}</b></label>)}</div>
+                    <button className="secondaryButton" type="button" onClick={addPlanningItems} disabled={saving || selectedPlanningIds.length === 0}>Copiar selecionados</button>
+                  </>}
+                </section>
+              </>
+            )}
+            {notice && <p className="notice" role="status">{notice}</p>}
+          </div>
+
+          <aside className="simulatorAside" aria-labelledby="simulator-summary-title">
+            <p className="eyebrow">CENÁRIOS SALVOS</p><h2 id="simulator-summary-title">Suas possibilidades.</h2>
+            <form className="asideNewSimulation" onSubmit={createSimulation}><input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Nome da nova simulação" maxLength={120} /><button className="secondaryButton" type="submit" disabled={saving}>+ Nova</button></form>
+            <div className="simulationList">{loading ? <p className="emptyState">Carregando...</p> : simulations.length === 0 ? <p className="emptyState">Nenhuma simulação salva.</p> : simulations.map((item) => <button className={item.id === selectedId ? "simulationCard selected" : "simulationCard"} type="button" key={item.id} onClick={() => selectSimulation(item.id)}><span><strong>{item.name}</strong><small>{item.reference || "Sem referência"} · {item.item_count} itens</small></span><b className={Number(item.final_balance) < 0 ? "negative" : ""}>{formatCurrency(item.final_balance)}</b></button>)}</div>
+            {simulation && <div className="simulationSummary"><p className="eyebrow">RESUMO FINAL</p><strong className={finalBalance < 0 ? "simulationFinal negative" : "simulationFinal"}>{formatCurrency(finalBalance)}</strong><div className="summaryRows"><div><span>Entradas</span><b className="income">{formatCurrency(totalIncome)}</b></div><div><span>Saídas</span><b>{formatCurrency(totalExpenses)}</b></div><div><span>Itens</span><b>{simulation.items.length}</b></div></div><h3>Gastos por categoria</h3>{simulation.totals.expenses_by_category.length === 0 ? <p className="emptyState">As saídas aparecerão aqui.</p> : <div className="simulationCategoryList">{simulation.totals.expenses_by_category.map((category) => <div key={category.category_id || "none"}><span>{category.category_name}</span><b>{formatCurrency(category.amount)}</b></div>)}</div>}</div>}
+          </aside>
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -2177,6 +2521,10 @@ export default function Home({ view = "dashboard" }) {
 
   if (view === "planning") {
     return <PlanningView session={session} accountName={accountName} onLogout={handleLogout} />;
+  }
+
+  if (view === "simulator") {
+    return <SimulatorView session={session} accountName={accountName} onLogout={handleLogout} />;
   }
 
   if (view === "budget") {

@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -64,6 +65,138 @@ class CategoryRead(CategoryCreate):
     id: UUID
     is_active: bool
     created_at: datetime
+
+
+class SimulationSource(StrEnum):
+    MANUAL = "manual"
+    PLANNING = "planning"
+
+
+class SimulationCreate(BaseModel):
+    name: str = Field(default="Nova simulação", min_length=1, max_length=120)
+    reference: str | None = Field(default=None, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_simulation_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Text must contain at least one non-space character")
+        return normalized
+
+    @field_validator("reference")
+    @classmethod
+    def normalize_simulation_reference(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class SimulationUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    reference: str | None = Field(default=None, max_length=120)
+
+    @field_validator("name", "reference")
+    @classmethod
+    def normalize_simulation_update_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Text must contain at least one non-space character")
+        return normalized
+
+
+class SimulationItemCreate(BaseModel):
+    description: str = Field(min_length=1, max_length=160)
+    direction: Direction
+    amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    category_id: UUID | None = None
+    source: SimulationSource = SimulationSource.MANUAL
+
+    @field_validator("description")
+    @classmethod
+    def normalize_simulation_description(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Description must contain at least one non-space character")
+        return normalized
+
+
+class SimulationItemUpdate(BaseModel):
+    description: str | None = Field(default=None, min_length=1, max_length=160)
+    direction: Direction | None = None
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    category_id: UUID | None = None
+
+    @field_validator("description")
+    @classmethod
+    def normalize_simulation_update_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Description must contain at least one non-space character")
+        return normalized
+
+
+class SimulationMove(BaseModel):
+    direction: Literal["up", "down"]
+
+
+class SimulationPlanningImport(BaseModel):
+    commitment_ids: list[UUID] = Field(min_length=1, max_length=50)
+
+
+class SimulationCategoryTotal(BaseModel):
+    category_id: UUID | None = None
+    category_name: str
+    amount: Decimal
+
+
+class SimulationTotals(BaseModel):
+    total_income: Decimal
+    total_expenses: Decimal
+    final_balance: Decimal
+    expenses_by_category: list[SimulationCategoryTotal]
+
+
+class SimulationItemRead(SimulationItemCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    simulation_id: UUID
+    position: int
+    category_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SimulationSummaryRead(SimulationCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    item_count: int
+    total_income: Decimal
+    total_expenses: Decimal
+    final_balance: Decimal
+    created_at: datetime
+    updated_at: datetime
+
+
+class SimulationRead(SimulationSummaryRead):
+    items: list[SimulationItemRead]
+    totals: SimulationTotals
+
+
+class SimulationPlanningOptionRead(BaseModel):
+    id: UUID
+    name: str
+    amount: Decimal
+    direction: Direction
+    next_due_on: date
+    category_id: UUID | None = None
+    category_name: str | None = None
 
 
 class TransactionCreate(BaseModel):
