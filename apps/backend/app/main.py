@@ -693,6 +693,22 @@ def update_category(
 ) -> dict:
     try:
         with get_connection() as connection:
+            current = connection.execute(
+                """
+                select kind
+                from public.categories
+                where id = %s and user_id = %s and is_active = true
+                """,
+                (category_id, user_id),
+            ).fetchone()
+            if not current:
+                raise HTTPException(status_code=404, detail="Category not found")
+
+            if current["kind"] != payload.kind.value and category_has_usage(
+                connection, category_id, user_id
+            ):
+                raise category_kind_conflict()
+
             row = connection.execute(
                 """
                 update public.categories
@@ -705,10 +721,7 @@ def update_category(
     except UniqueViolation as error:
         raise HTTPException(status_code=409, detail="Category already exists") from error
     except CheckViolation as error:
-        raise HTTPException(
-            status_code=409,
-            detail="Category is being used by the budget distribution",
-        ) from error
+        raise category_kind_conflict() from error
 
     if not row:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -1181,6 +1194,64 @@ def validate_category_for_direction(
     return category
 
 
+def category_kind_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "category_kind_immutable",
+            "message": "Esta categoria já foi usada e não pode mudar de tipo. Arquive-a e crie outra categoria.",
+        },
+    )
+
+
+def category_has_usage(connection, category_id: UUID, user_id: UUID) -> bool:
+    row = connection.execute(
+        """
+        select (
+          exists (
+            select 1 from public.transactions
+            where category_id = %s and user_id = %s
+          )
+          or exists (
+            select 1 from public.commitments
+            where category_id = %s and user_id = %s
+          )
+          or exists (
+            select 1 from public.budget_settings
+            where income_category_id = %s and user_id = %s
+          )
+          or exists (
+            select 1 from public.budget_allocations
+            where category_id = %s and user_id = %s
+          )
+          or exists (
+            select 1 from public.budget_months
+            where income_category_id = %s and user_id = %s
+          )
+          or exists (
+            select 1 from public.budget_month_allocations
+            where category_id = %s and user_id = %s
+          )
+        ) as is_used
+        """,
+        (
+            category_id,
+            user_id,
+            category_id,
+            user_id,
+            category_id,
+            user_id,
+            category_id,
+            user_id,
+            category_id,
+            user_id,
+            category_id,
+            user_id,
+        ),
+    ).fetchone()
+    return bool(row["is_used"])
+
+
 def validate_commitment_for_transaction(
     connection,
     commitment_id: UUID | None,
@@ -1206,12 +1277,42 @@ def validate_commitment_for_transaction(
             status_code=400,
             detail="Commitment is not compatible with this direction",
         )
-    if category_id and commitment["category_id"] and category_id != commitment["category_id"]:
+    if commitment["category_id"] != category_id:
         raise HTTPException(
-            status_code=400,
-            detail="Transaction category must match its commitment category",
+            status_code=409,
+            detail={
+                "code": "commitment_category_mismatch",
+                "message": "A categoria da movimentação deve ser igual à categoria do compromisso, inclusive quando uma delas não tem categoria.",
+            },
         )
     return commitment
+
+
+def validate_commitment_category_change(
+    connection,
+    commitment_id: UUID,
+    category_id: UUID | None,
+    user_id: UUID,
+) -> None:
+    linked_transaction = connection.execute(
+        """
+        select id
+        from public.transactions
+        where commitment_id = %s
+          and user_id = %s
+          and category_id is distinct from %s
+        limit 1
+        """,
+        (commitment_id, user_id, category_id),
+    ).fetchone()
+    if linked_transaction:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "commitment_category_mismatch",
+                "message": "Não é possível trocar a categoria deste compromisso enquanto houver movimentações vinculadas com outra categoria.",
+            },
+        )
 
 
 @router.get("/commitments", response_model=list[CommitmentRead])
@@ -1327,39 +1428,51 @@ def update_commitment(
             payload.direction.value,
             user_id,
         )
-        row = connection.execute(
-            """
-            update public.commitments
-            set category_id = %s, name = %s, commitment_type = %s,
-                direction = %s, amount = %s, frequency = %s,
-                due_rule = %s, due_day = %s, due_month = %s, business_day_number = %s,
-                starts_on = %s, next_due_on = %s, ends_on = %s,
-                total_installments = %s, current_installment = %s
-            where id = %s and user_id = %s and is_active = true
-            returning id, name, commitment_type, direction, amount, frequency,
-              due_rule, due_day, due_month, business_day_number, starts_on, next_due_on, ends_on, category_id,
-              total_installments, current_installment, is_active, created_at
-            """,
-            (
-                payload.category_id,
-                payload.name.strip(),
-                payload.commitment_type.value,
-                payload.direction.value,
-                payload.amount,
-                payload.frequency.value,
-                payload.due_rule.value,
-                payload.due_day,
-                payload.due_month,
-                payload.business_day_number,
-                payload.starts_on,
-                next_due_on,
-                payload.ends_on,
-                payload.total_installments,
-                payload.current_installment,
-                commitment_id,
-                user_id,
-            ),
-        ).fetchone()
+        try:
+            validate_commitment_category_change(
+                connection, commitment_id, payload.category_id, user_id
+            )
+            row = connection.execute(
+                """
+                update public.commitments
+                set category_id = %s, name = %s, commitment_type = %s,
+                    direction = %s, amount = %s, frequency = %s,
+                    due_rule = %s, due_day = %s, due_month = %s, business_day_number = %s,
+                    starts_on = %s, next_due_on = %s, ends_on = %s,
+                    total_installments = %s, current_installment = %s
+                where id = %s and user_id = %s and is_active = true
+                returning id, name, commitment_type, direction, amount, frequency,
+                  due_rule, due_day, due_month, business_day_number, starts_on, next_due_on, ends_on, category_id,
+                  total_installments, current_installment, is_active, created_at
+                """,
+                (
+                    payload.category_id,
+                    payload.name.strip(),
+                    payload.commitment_type.value,
+                    payload.direction.value,
+                    payload.amount,
+                    payload.frequency.value,
+                    payload.due_rule.value,
+                    payload.due_day,
+                    payload.due_month,
+                    payload.business_day_number,
+                    payload.starts_on,
+                    next_due_on,
+                    payload.ends_on,
+                    payload.total_installments,
+                    payload.current_installment,
+                    commitment_id,
+                    user_id,
+                ),
+            ).fetchone()
+        except CheckViolation as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "commitment_category_mismatch",
+                    "message": "Não é possível trocar a categoria deste compromisso enquanto houver movimentações vinculadas com outra categoria.",
+                },
+            ) from error
 
     if not row:
         raise HTTPException(status_code=404, detail="Commitment not found")
