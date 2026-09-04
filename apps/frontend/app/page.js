@@ -203,6 +203,20 @@ function Progress({ value, label, detail, accent = false }) {
   );
 }
 
+function ResponsiveDetails({ label, children, className = "" }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className={`responsiveDetails ${open ? "isOpen" : ""} ${className}`.trim()}>
+      <button className="responsiveDetailsSummary" type="button" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
+        <span>{label}</span>
+        <span className="responsiveDetailsIcon" aria-hidden="true">+</span>
+      </button>
+      <div className="responsiveDetailsBody">{children}</div>
+    </div>
+  );
+}
+
 function Login({ email, password, setEmail, setPassword, onSubmit, error, busy }) {
   return (
     <main className="authShell">
@@ -252,22 +266,40 @@ function Login({ email, password, setEmail, setPassword, onSubmit, error, busy }
 }
 
 function Sidebar({ active, accountName, onLogout }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const secondaryActive = ["budget", "categories", "data", "settings"].includes(active);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileMenuOpen]);
+
   return (
-    <aside className="sidebar">
+    <>
+      <aside className="sidebar">
       <Link className="brand" href="/" aria-label="Cifro">
         <span className="brandMark"><i /><i /></span>
         <span>cifro</span>
       </Link>
 
       <nav className="mainNav" aria-label="Navegação principal">
-        <Link className={active === "dashboard" ? "navItem active" : "navItem"} href="/">Visão geral</Link>
-        <Link className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</Link>
-        <Link className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejamento</Link>
-        <Link className={active === "simulator" ? "navItem active" : "navItem"} href="/simulador">Simulador</Link>
-        <Link className={active === "budget" ? "navItem active" : "navItem"} href="/distribuicao">Distribuição</Link>
-        <Link className={active === "categories" ? "navItem active" : "navItem"} href="/categorias">Categorias</Link>
-        <Link className={active === "data" ? "navItem active" : "navItem"} href="/dados">Dados</Link>
-        <Link className={active === "settings" ? "navItem active" : "navItem"} href="/configuracoes">Configurações</Link>
+        <Link className={active === "dashboard" ? "navItem navPrimary active" : "navItem navPrimary"} href="/"><span className="navDesktopLabel">Visão geral</span><span className="navMobileLabel">Visão</span></Link>
+        <Link className={active === "register" ? "navItem navPrimary active" : "navItem navPrimary"} href="/registrar">Registrar</Link>
+        <Link className={active === "planning" ? "navItem navPrimary active" : "navItem navPrimary"} href="/planejamento"><span className="navDesktopLabel">Planejamento</span><span className="navMobileLabel">Planejar</span></Link>
+        <Link className={active === "simulator" ? "navItem navPrimary active" : "navItem navPrimary"} href="/simulador"><span className="navDesktopLabel">Simulador</span><span className="navMobileLabel">Simular</span></Link>
+        <Link className={active === "budget" ? "navItem navSecondary active" : "navItem navSecondary"} href="/distribuicao">Distribuição</Link>
+        <Link className={active === "categories" ? "navItem navSecondary active" : "navItem navSecondary"} href="/categorias">Categorias</Link>
+        <Link className={active === "data" ? "navItem navSecondary active" : "navItem navSecondary"} href="/dados">Dados</Link>
+        <Link className={active === "settings" ? "navItem navSecondary active" : "navItem navSecondary"} href="/configuracoes">Configurações</Link>
       </nav>
 
       <div className="account">
@@ -278,7 +310,34 @@ function Sidebar({ active, accountName, onLogout }) {
         </div>
         <button className="moreButton" type="button" onClick={onLogout} aria-label="Sair">sair</button>
       </div>
-    </aside>
+      </aside>
+
+      <nav className="mobileBottomNav" aria-label="Navegação principal no celular">
+        <Link className={active === "dashboard" ? "navItem active" : "navItem"} href="/">Visão</Link>
+        <Link className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</Link>
+        <Link className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejar</Link>
+        <Link className={active === "simulator" ? "navItem active" : "navItem"} href="/simulador">Simular</Link>
+        <button className={secondaryActive ? "navItem mobileMoreButton active" : "navItem mobileMoreButton"} type="button" onClick={() => setMobileMenuOpen(true)} aria-expanded={mobileMenuOpen} aria-controls="mobile-more-menu">Mais</button>
+      </nav>
+
+      {mobileMenuOpen && (
+        <div className="mobileNavOverlay" onClick={() => setMobileMenuOpen(false)}>
+          <section className="mobileNavSheet" id="mobile-more-menu" role="dialog" aria-modal="true" aria-labelledby="mobile-menu-title" onClick={(event) => event.stopPropagation()}>
+            <div className="mobileNavSheetHeader">
+              <div><span>Conta pessoal</span><strong id="mobile-menu-title">{accountName}</strong></div>
+              <button type="button" onClick={() => setMobileMenuOpen(false)} aria-label="Fechar menu" autoFocus>×</button>
+            </div>
+            <nav aria-label="Outras áreas">
+              <Link className={active === "budget" ? "active" : ""} href="/distribuicao">Distribuição <span>→</span></Link>
+              <Link className={active === "categories" ? "active" : ""} href="/categorias">Categorias <span>→</span></Link>
+              <Link className={active === "data" ? "active" : ""} href="/dados">Dados <span>→</span></Link>
+              <Link className={active === "settings" ? "active" : ""} href="/configuracoes">Configurações <span>→</span></Link>
+            </nav>
+            <button className="mobileLogout" type="button" onClick={onLogout}>Sair da conta</button>
+          </section>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -617,7 +676,7 @@ function SimulatorView({ session, accountName, onLogout }) {
             <p className="eyebrow">CENÁRIOS SALVOS</p><h2 id="simulator-summary-title">Suas possibilidades.</h2>
             <form className="asideNewSimulation" onSubmit={createSimulation}><input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Nome da nova simulação" maxLength={120} /><button className="secondaryButton" type="submit" disabled={saving}>+ Nova</button></form>
             <div className="simulationList">{loading ? <p className="emptyState">Carregando...</p> : simulations.length === 0 ? <p className="emptyState">Nenhuma simulação salva.</p> : simulations.map((item) => <button className={item.id === selectedId ? "simulationCard selected" : "simulationCard"} type="button" key={item.id} onClick={() => selectSimulation(item.id)}><span><strong>{item.name}</strong><small>{item.reference || "Sem referência"} · {item.item_count} itens</small></span><b className={Number(item.final_balance) < 0 ? "negative" : ""}>{formatCurrency(item.final_balance)}</b></button>)}</div>
-            {simulation && <div className="simulationSummary"><p className="eyebrow">RESUMO FINAL</p><strong className={finalBalance < 0 ? "simulationFinal negative" : "simulationFinal"}>{formatCurrency(finalBalance)}</strong><div className="summaryRows"><div><span>Entradas</span><b className="income">{formatCurrency(totalIncome)}</b></div><div><span>Saídas</span><b>{formatCurrency(totalExpenses)}</b></div><div><span>Itens</span><b>{simulation.items.length}</b></div></div><h3>Gastos por categoria</h3>{simulation.totals.expenses_by_category.length === 0 ? <p className="emptyState">As saídas aparecerão aqui.</p> : <div className="simulationCategoryList">{simulation.totals.expenses_by_category.map((category) => <div key={category.category_id || "none"}><span>{category.category_name}</span><b>{formatCurrency(category.amount)}</b></div>)}</div>}</div>}
+            {simulation && <ResponsiveDetails className="simulatorSummaryDetails" label={`Resumo · ${formatCurrency(finalBalance)}`}><div className="simulationSummary"><p className="eyebrow">RESUMO FINAL</p><strong className={finalBalance < 0 ? "simulationFinal negative" : "simulationFinal"}>{formatCurrency(finalBalance)}</strong><div className="summaryRows"><div><span>Entradas</span><b className="income">{formatCurrency(totalIncome)}</b></div><div><span>Saídas</span><b>{formatCurrency(totalExpenses)}</b></div><div><span>Itens</span><b>{simulation.items.length}</b></div></div><h3>Gastos por categoria</h3>{simulation.totals.expenses_by_category.length === 0 ? <p className="emptyState">As saídas aparecerão aqui.</p> : <div className="simulationCategoryList">{simulation.totals.expenses_by_category.map((category) => <div key={category.category_id || "none"}><span>{category.category_name}</span><b>{formatCurrency(category.amount)}</b></div>)}</div>}</div></ResponsiveDetails>}
           </aside>
         </div>
       </section>
@@ -881,7 +940,6 @@ function RegisterView({ session, accountName, onLogout }) {
       <section className="content registrationContent">
         <header className="topbar">
           <div>
-            <p className="eyebrow">NOVA MOVIMENTAÇÃO</p>
             <h1>Registre sem interromper o dia.</h1>
           </div>
           <Link className="backLink" href="/">← Visão geral</Link>
@@ -891,9 +949,8 @@ function RegisterView({ session, accountName, onLogout }) {
           <div className="registrationMain">
 
         <section className="registrationIntro" aria-labelledby="registration-title">
-          <p className="eyebrow">REGISTRO RÁPIDO</p>
           <h2 id="registration-title">O que aconteceu?</h2>
-          <p>Escreva como você falaria. O Cifro identifica o valor e registra a movimentação hoje.</p>
+          <p>Digite o que entrou ou saiu. O Cifro identifica o valor e você confirma antes de salvar.</p>
         </section>
 
         <form className="quickEntry registrationEntry" onSubmit={registerMovement}>
@@ -1060,7 +1117,7 @@ function RegisterView({ session, accountName, onLogout }) {
 
         <section className="registerHistory" aria-labelledby="history-title">
           <div className="sectionHeader">
-            <div><p className="eyebrow">HISTÓRICO</p><h2 id="history-title">Últimos registros</h2></div>
+            <h2 id="history-title">Últimos registros</h2>
             <span className="seeAll">{loading ? "Atualizando" : `${movements.length} registros`}</span>
           </div>
           <div className="movementList">
@@ -1088,7 +1145,6 @@ function RegisterView({ session, accountName, onLogout }) {
 
           <aside className="quickCategories" aria-labelledby="quick-categories-title">
             <div className="asideHeading">
-              <p className="eyebrow">ATALHOS</p>
               <h2 id="quick-categories-title">Categorias</h2>
             </div>
             <p className="asideDescription">Escolha uma categoria na confirmação ou organize as suas aqui.</p>
@@ -1247,16 +1303,18 @@ function SettingsView({ session, accountName, onLogout }) {
           </form>
 
           <aside className="settingsSummary" aria-labelledby="settings-summary-title">
-            <p className="eyebrow">RESUMO</p>
-            <h2 id="settings-summary-title">Seu Cifro, suas regras.</h2>
-            <div className="settingsSummaryValue">{draft.auto_confirm_income ? "Automático" : "Manual"}</div>
-            <span className="settingsSummaryLabel">confirmação de recebimentos</span>
-            <div className="summaryRows">
-              <div><span>Datas padrão</span><b>{draft.default_due_rule === "business_day" ? `${draft.default_business_day_number}º útil` : "Dia fixo"}</b></div>
-              <div><span>Sábado</span><b>Conta</b></div>
-              <div><span>Domingo</span><b>Não conta</b></div>
-            </div>
-            <Link className="asideLink" href="/planejamento">Abrir planejamento <span>→</span></Link>
+            <ResponsiveDetails label="Resumo das configurações">
+              <p className="eyebrow">RESUMO</p>
+              <h2 id="settings-summary-title">Seu Cifro, suas regras.</h2>
+              <div className="settingsSummaryValue">{draft.auto_confirm_income ? "Automático" : "Manual"}</div>
+              <span className="settingsSummaryLabel">confirmação de recebimentos</span>
+              <div className="summaryRows">
+                <div><span>Datas padrão</span><b>{draft.default_due_rule === "business_day" ? `${draft.default_business_day_number}º útil` : "Dia fixo"}</b></div>
+                <div><span>Sábado</span><b>Conta</b></div>
+                <div><span>Domingo</span><b>Não conta</b></div>
+              </div>
+              <Link className="asideLink" href="/planejamento">Abrir planejamento <span>→</span></Link>
+            </ResponsiveDetails>
           </aside>
         </div>
       </section>
@@ -1466,11 +1524,13 @@ function DataView({ session, accountName, onLogout }) {
           </div>
 
           <aside className="dataSummary" aria-labelledby="data-summary-title">
-            <p className="eyebrow">PRÓXIMA ETAPA</p>
-            <h2 id="data-summary-title">Importar sem perder o controle.</h2>
-            <p>Depois da exportação, vamos criar a importação com pré-visualização, validação por linha e confirmação antes de salvar.</p>
-            <div className="dataSummaryLine"><span>Agora</span><b>Exportar</b></div>
-            <div className="dataSummaryLine"><span>Depois</span><b>Importar</b></div>
+            <ResponsiveDetails label="Sobre a importação">
+              <p className="eyebrow">PRÓXIMA ETAPA</p>
+              <h2 id="data-summary-title">Importar sem perder o controle.</h2>
+              <p>Depois da exportação, vamos criar a importação com pré-visualização, validação por linha e confirmação antes de salvar.</p>
+              <div className="dataSummaryLine"><span>Agora</span><b>Exportar</b></div>
+              <div className="dataSummaryLine"><span>Depois</span><b>Importar</b></div>
+            </ResponsiveDetails>
           </aside>
         </div>
       </section>
@@ -1861,24 +1921,26 @@ function BudgetView({ session, accountName, onLogout }) {
           </div>
 
           <aside className="budgetSummary" aria-labelledby="budget-summary-title">
-            <p className="eyebrow">{formatMonth(budget?.month)}</p>
-            <h2 id="budget-summary-title">Seu mapa do mês.</h2>
-            <strong className="budgetBaseValue">{formatCurrency(budget?.base_amount)}</strong>
-            <span className="budgetBaseLabel">base considerada</span>
-            <div className="distributionMeter" aria-label={`${totalPercentage}% distribuído`}><span style={{ width: `${Math.min(100, totalPercentage)}%` }} /></div>
-            <div className="summaryRows">
-              <div><span>Distribuído</span><b>{formatCurrency(allocatedAmount)}</b></div>
-              <div><span>{Number(budget?.unallocated_amount || 0) < 0 ? "Acima da base" : "Sem destino"}</span><b>{formatCurrency(Math.abs(Number(budget?.unallocated_amount || 0)))}</b></div>
-              <div><span>{Number(budget?.unallocated_percentage || 0) < 0 ? "Percentual excedido" : "Percentual livre"}</span><b>{Math.abs(Number(budget?.unallocated_percentage ?? 100)).toLocaleString("pt-BR")}%</b></div>
-            </div>
-            <div className="budgetTemplateAction">
-              <span>MODELO DOS PRÓXIMOS MESES</span>
-              <p>Copie a base e as frações deste mês para os meses que ainda não foram abertos.</p>
-              <button className="secondaryButton" type="button" onClick={saveAsTemplate} disabled={busyAction === "template" || loading}>
-                {busyAction === "template" ? "Salvando modelo..." : "Usar este mês como padrão"}
-              </button>
-            </div>
-            <Link className="asideLink" href="/categorias">Gerenciar categorias <span>→</span></Link>
+            <ResponsiveDetails label={`Resumo · ${formatCurrency(budget?.base_amount)}`}>
+              <p className="eyebrow">{formatMonth(budget?.month)}</p>
+              <h2 id="budget-summary-title">Seu mapa do mês.</h2>
+              <strong className="budgetBaseValue">{formatCurrency(budget?.base_amount)}</strong>
+              <span className="budgetBaseLabel">base considerada</span>
+              <div className="distributionMeter" aria-label={`${totalPercentage}% distribuído`}><span style={{ width: `${Math.min(100, totalPercentage)}%` }} /></div>
+              <div className="summaryRows">
+                <div><span>Distribuído</span><b>{formatCurrency(allocatedAmount)}</b></div>
+                <div><span>{Number(budget?.unallocated_amount || 0) < 0 ? "Acima da base" : "Sem destino"}</span><b>{formatCurrency(Math.abs(Number(budget?.unallocated_amount || 0)))}</b></div>
+                <div><span>{Number(budget?.unallocated_percentage || 0) < 0 ? "Percentual excedido" : "Percentual livre"}</span><b>{Math.abs(Number(budget?.unallocated_percentage ?? 100)).toLocaleString("pt-BR")}%</b></div>
+              </div>
+              <div className="budgetTemplateAction">
+                <span>MODELO DOS PRÓXIMOS MESES</span>
+                <p>Copie a base e as frações deste mês para os meses que ainda não foram abertos.</p>
+                <button className="secondaryButton" type="button" onClick={saveAsTemplate} disabled={busyAction === "template" || loading}>
+                  {busyAction === "template" ? "Salvando modelo..." : "Usar este mês como padrão"}
+                </button>
+              </div>
+              <Link className="asideLink" href="/categorias">Gerenciar categorias <span>→</span></Link>
+            </ResponsiveDetails>
           </aside>
         </div>
       </section>
@@ -2107,7 +2169,6 @@ function PlanningView({ session, accountName, onLogout }) {
       <section className="content planningContent">
         <header className="topbar">
           <div>
-            <p className="eyebrow">PLANEJAMENTO</p>
             <h1>Organize o que ainda vai acontecer.</h1>
           </div>
           <Link className="backLink" href="/">← Visão geral</Link>
@@ -2116,7 +2177,6 @@ function PlanningView({ session, accountName, onLogout }) {
         <div className="planningLayout">
           <div className="planningMain">
             <section className="planningIntro">
-              <p className="eyebrow">PRÓXIMOS COMPROMISSOS</p>
               <h2>Antecipe cobranças, parcelas e recebimentos.</h2>
               <p>Cadastre uma vez o que se repete. O Cifro projeta a ocorrência no próximo mês sem duplicar registros reais.</p>
             </section>
@@ -2208,17 +2268,19 @@ function PlanningView({ session, accountName, onLogout }) {
                   </>
                 )}
               </div>
-              <p className="planningHint">Use “Dia útil” para regras como 5º dia útil. O Cifro conta segunda a sábado e não conta domingo; feriados ainda não entram nessa primeira versão.</p>
+              {form.commitment_type !== "installment" && form.due_rule === "business_day" && (
+                <p className="planningHint"><strong>Como contamos:</strong> segunda a sábado são dias úteis; domingos não contam. Feriados ainda não são considerados.</p>
+              )}
               {notice && <p className="notice" role="status">{notice}</p>}
               <div className="planningActions">
-                <span>{editingId ? "As alterações afetam as próximas projeções." : "O compromisso não cria um gasto real agora."}</span>
+                {editingId && <span>As alterações valem para as próximas projeções.</span>}
                 <button className="confirmButton" type="submit" disabled={busy}>{busy ? "Salvando..." : editingId ? "Salvar alterações" : "Adicionar ao planejamento"}</button>
               </div>
             </form>
 
             <section className="commitmentListSection" aria-labelledby="commitment-list-title">
               <div className="sectionHeader">
-                <div><p className="eyebrow">AGENDA</p><h2 id="commitment-list-title">Cobranças e recebimentos</h2></div>
+                <h2 id="commitment-list-title">Cobranças e recebimentos</h2>
                 <span className="seeAll">{loading ? "Atualizando" : `${commitments.length} ativos`}</span>
               </div>
               <div className="commitmentList">
@@ -2240,14 +2302,16 @@ function PlanningView({ session, accountName, onLogout }) {
           </div>
 
           <aside className="planningSummary" aria-labelledby="planning-summary-title">
-            <p className="eyebrow">COMO FUNCIONA</p>
-            <h2 id="planning-summary-title">O Cifro olha para frente.</h2>
-            <div className="planningRules">
-              <div><strong>Recorrentes</strong><span>Salário e contas mensais aparecem no próximo mês pelo dia cadastrado.</span></div>
-              <div><strong>Parcelas</strong><span>Entram somente na data da próxima parcela, com o progresso visível.</span></div>
-              <div><strong>Registros reais</strong><span>O planejamento não altera o saldo de hoje nem duplica uma movimentação.</span></div>
-            </div>
-            <Link className="asideLink" href="/">Voltar para a visão geral <span>→</span></Link>
+            <ResponsiveDetails label="Como o planejamento funciona">
+              <p className="eyebrow">COMO FUNCIONA</p>
+              <h2 id="planning-summary-title">O Cifro olha para frente.</h2>
+              <div className="planningRules">
+                <div><strong>Recorrentes</strong><span>Salário e contas mensais aparecem no próximo mês pelo dia cadastrado.</span></div>
+                <div><strong>Parcelas</strong><span>Entram somente na data da próxima parcela, com o progresso visível.</span></div>
+                <div><strong>Registros reais</strong><span>O planejamento não altera o saldo de hoje nem duplica uma movimentação.</span></div>
+              </div>
+              <Link className="asideLink" href="/">Voltar para a visão geral <span>→</span></Link>
+            </ResponsiveDetails>
           </aside>
         </div>
       </section>
@@ -2425,16 +2489,18 @@ function CategoriesView({ session, accountName, onLogout }) {
           </div>
 
           <aside className="categorySummary" aria-labelledby="category-summary-title">
-            <p className="eyebrow">RESUMO</p>
-            <h2 id="category-summary-title">Organização simples.</h2>
-            <strong className="categoryTotal">{categories.length}</strong>
-            <span className="categoryTotalLabel">categorias criadas</span>
-            <div className="summaryRows">
-              <div><span>Para gastos</span><b>{expenseCategoryCount}</b></div>
-              <div><span>Para recebimentos</span><b>{incomeCategoryCount}</b></div>
-              <div><span>Para os dois</span><b>{sharedCategoryCount}</b></div>
-            </div>
-            <Link className="asideLink" href="/registrar">Registrar movimentação <span>→</span></Link>
+            <ResponsiveDetails label={`Resumo · ${categories.length} categorias`}>
+              <p className="eyebrow">RESUMO</p>
+              <h2 id="category-summary-title">Organização simples.</h2>
+              <strong className="categoryTotal">{categories.length}</strong>
+              <span className="categoryTotalLabel">categorias criadas</span>
+              <div className="summaryRows">
+                <div><span>Para gastos</span><b>{expenseCategoryCount}</b></div>
+                <div><span>Para recebimentos</span><b>{incomeCategoryCount}</b></div>
+                <div><span>Para os dois</span><b>{sharedCategoryCount}</b></div>
+              </div>
+              <Link className="asideLink" href="/registrar">Registrar movimentação <span>→</span></Link>
+            </ResponsiveDetails>
           </aside>
         </div>
       </section>
@@ -2551,18 +2617,17 @@ export default function Home({ view = "dashboard" }) {
       <section className="content" id="overview">
         <header className="topbar">
           <div>
-            <p className="eyebrow">SUA VISÃO FINANCEIRA</p>
             <h1>Seu dinheiro, à frente.</h1>
           </div>
           <div className="periodButton" aria-label="Período atual">
-            <span className="periodIcon" /> {formatMonth(dashboard?.month)} <b>—</b> {formatMonth(dashboard?.next_month)}
+            {formatMonth(dashboard?.month)} <b>—</b> {formatMonth(dashboard?.next_month)}
           </div>
         </header>
 
         <section className="comparison" aria-labelledby="comparison-title">
           <div className="sectionIntro">
             <span id="comparison-title">Agora e depois</span>
-            <span>{loadingDashboard ? "Atualizando" : "Dados reais"}</span>
+            {loadingDashboard && <span>Atualizando</span>}
           </div>
 
           <div className="comparisonGrid">
@@ -2576,12 +2641,15 @@ export default function Home({ view = "dashboard" }) {
               </div>
               <Progress value={currentUsed} label={`${currentUsed}% utilizado`} detail="movimentações concluídas" />
               {dashboard?.budget ? (
-                <div className="budgetDashboardPreview">
-                  <div><span>Distribuição</span><Link href="/distribuicao">ajustar</Link></div>
-                  <p><strong>{Number(dashboard.budget.total_percentage).toLocaleString("pt-BR")}%</strong> destinado em {dashboard.budget.allocation_count} categorias</p>
-                  <small>{Number(dashboard.budget.unallocated_amount) < 0
-                    ? `${formatCurrency(Math.abs(Number(dashboard.budget.unallocated_amount)))} acima da base`
-                    : `${formatCurrency(dashboard.budget.unallocated_amount)} ainda sem destino`}</small>
+                <div className={Number(dashboard.budget.unallocated_amount) < 0 ? "budgetDashboardPreview overBudget" : "budgetDashboardPreview"}>
+                  <div>
+                    <span>Distribuição</span>
+                    <p><strong>{Number(dashboard.budget.total_percentage).toLocaleString("pt-BR")}%</strong> em {dashboard.budget.allocation_count} categorias</p>
+                    <small>{Number(dashboard.budget.unallocated_amount) < 0
+                      ? `${formatCurrency(Math.abs(Number(dashboard.budget.unallocated_amount)))} acima da base`
+                      : `${formatCurrency(dashboard.budget.unallocated_amount)} ainda sem destino`}</small>
+                  </div>
+                  <Link href="/distribuicao">Ajustar</Link>
                 </div>
               ) : (
                 <p className="commitmentEmpty">Sua renda ainda não foi dividida. <Link href="/distribuicao">Distribuir</Link></p>
@@ -2620,18 +2688,17 @@ export default function Home({ view = "dashboard" }) {
         <div className="lowerGrid">
           <section className="flowSection" aria-labelledby="flow-title">
             <div className="sectionHeader">
-              <div><p className="eyebrow">EVOLUÇÃO</p><h2 id="flow-title">Seu fluxo</h2></div>
-              <div className="trend"><strong>Em breve</strong><span>com histórico suficiente</span></div>
+              <h2 id="flow-title">Evolução mensal</h2>
             </div>
-            <div className="chart chartEmpty" role="img" aria-label="Gráfico será preenchido conforme novos meses forem registrados">
-              <span>Registre algumas movimentações para ver sua evolução.</span>
-              <div className="chartLabels"><span>AGORA</span><span>DEPOIS</span></div>
+            <div className="flowEmpty">
+              <p>A comparação aparecerá quando houver pelo menos dois meses completos.</p>
+              <Link href="/registrar">Registrar movimentação <span>→</span></Link>
             </div>
           </section>
 
           <section className="recentSection" id="movements" aria-labelledby="recent-title">
             <div className="sectionHeader">
-              <div><p className="eyebrow">MOVIMENTAÇÕES</p><h2 id="recent-title">Recentes</h2></div>
+              <h2 id="recent-title">Movimentações recentes</h2>
               <span className="seeAll">{movements.length} registradas</span>
             </div>
             <div className="movementList">
