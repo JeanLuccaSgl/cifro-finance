@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getSupabaseBrowserClient } from "../lib/supabase";
 import { useSession } from "./providers";
 
@@ -217,6 +217,66 @@ function ResponsiveDetails({ label, children, className = "" }) {
   );
 }
 
+function ConfirmationDialog({ title, message, confirmLabel = "Confirmar", cancelLabel = "Agora não", tone = "primary", onConfirm, onCancel }) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onCancel();
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onCancel]);
+
+  return (
+    <div className="confirmationDialogOverlay" onClick={onCancel}>
+      <section className={`confirmationDialog ${tone}`} role="alertdialog" aria-modal="true" aria-labelledby="confirmation-dialog-title" aria-describedby="confirmation-dialog-message" onClick={(event) => event.stopPropagation()}>
+        <p className="confirmationDialogLabel">{tone === "danger" ? "Atenção" : "Confirmação"}</p>
+        <h2 id="confirmation-dialog-title">{title}</h2>
+        <p className="confirmationDialogMessage" id="confirmation-dialog-message">{message}</p>
+        <div className="confirmationDialogActions">
+          <button className="dialogCancelButton" type="button" onClick={onCancel} autoFocus>{cancelLabel}</button>
+          <button className="dialogConfirmButton" type="button" onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function useConfirmationDialog() {
+  const [dialog, setDialog] = useState(null);
+  const resolver = useRef(null);
+
+  useEffect(() => () => {
+    if (resolver.current) resolver.current(false);
+  }, []);
+
+  function askConfirmation(options) {
+    if (resolver.current) resolver.current(false);
+    return new Promise((resolve) => {
+      resolver.current = resolve;
+      setDialog(options);
+    });
+  }
+
+  function answer(confirmed) {
+    const resolve = resolver.current;
+    resolver.current = null;
+    setDialog(null);
+    if (resolve) resolve(confirmed);
+  }
+
+  return {
+    askConfirmation,
+    confirmationDialog: dialog ? (
+      <ConfirmationDialog {...dialog} onConfirm={() => answer(true)} onCancel={() => answer(false)} />
+    ) : null,
+  };
+}
+
 function Login({ email, password, setEmail, setPassword, onSubmit, error, busy }) {
   return (
     <main className="authShell">
@@ -266,22 +326,22 @@ function Login({ email, password, setEmail, setPassword, onSubmit, error, busy }
 }
 
 function Sidebar({ active, accountName, onLogout }) {
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const secondaryActive = ["budget", "categories", "data", "settings"].includes(active);
+  const mobileNavRef = useRef(null);
 
   useEffect(() => {
-    if (!mobileMenuOpen) return undefined;
-    const previousOverflow = document.body.style.overflow;
-    const closeOnEscape = (event) => {
-      if (event.key === "Escape") setMobileMenuOpen(false);
-    };
-    document.body.style.overflow = "hidden";
-    document.addEventListener("keydown", closeOnEscape);
+    const nav = mobileNavRef.current;
+    const selected = nav?.querySelector('[aria-current="page"]');
+    if (!nav || !selected) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      nav.scrollTo({
+        left: Math.max(0, selected.offsetLeft - (nav.clientWidth - selected.clientWidth) / 2),
+        behavior: "smooth",
+      });
+    });
     return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", closeOnEscape);
+      window.cancelAnimationFrame(frame);
     };
-  }, [mobileMenuOpen]);
+  }, [active]);
 
   return (
     <>
@@ -312,31 +372,17 @@ function Sidebar({ active, accountName, onLogout }) {
       </div>
       </aside>
 
-      <nav className="mobileBottomNav" aria-label="Navegação principal no celular">
-        <Link className={active === "dashboard" ? "navItem active" : "navItem"} href="/">Visão</Link>
-        <Link className={active === "register" ? "navItem active" : "navItem"} href="/registrar">Registrar</Link>
-        <Link className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento">Planejar</Link>
-        <Link className={active === "simulator" ? "navItem active" : "navItem"} href="/simulador">Simular</Link>
-        <button className={secondaryActive ? "navItem mobileMoreButton active" : "navItem mobileMoreButton"} type="button" onClick={() => setMobileMenuOpen(true)} aria-expanded={mobileMenuOpen} aria-controls="mobile-more-menu">Mais</button>
+      <nav className="mobileBottomNav" aria-label="Navegação principal no celular" ref={mobileNavRef}>
+        <Link className={active === "dashboard" ? "navItem active" : "navItem"} href="/" aria-current={active === "dashboard" ? "page" : undefined}>Visão</Link>
+        <Link className={active === "register" ? "navItem active" : "navItem"} href="/registrar" aria-current={active === "register" ? "page" : undefined}>Registrar</Link>
+        <Link className={active === "planning" ? "navItem active" : "navItem"} href="/planejamento" aria-current={active === "planning" ? "page" : undefined}>Planejar</Link>
+        <Link className={active === "simulator" ? "navItem active" : "navItem"} href="/simulador" aria-current={active === "simulator" ? "page" : undefined}>Simular</Link>
+        <Link className={active === "budget" ? "navItem active" : "navItem"} href="/distribuicao" aria-current={active === "budget" ? "page" : undefined}>Distribuir</Link>
+        <Link className={active === "categories" ? "navItem active" : "navItem"} href="/categorias" aria-current={active === "categories" ? "page" : undefined}>Categorias</Link>
+        <Link className={active === "data" ? "navItem active" : "navItem"} href="/dados" aria-current={active === "data" ? "page" : undefined}>Dados</Link>
+        <Link className={active === "settings" ? "navItem active" : "navItem"} href="/configuracoes" aria-current={active === "settings" ? "page" : undefined}>Ajustes</Link>
+        <button className="navItem mobileLogoutNav" type="button" onClick={onLogout}>Sair</button>
       </nav>
-
-      {mobileMenuOpen && (
-        <div className="mobileNavOverlay" onClick={() => setMobileMenuOpen(false)}>
-          <section className="mobileNavSheet" id="mobile-more-menu" role="dialog" aria-modal="true" aria-labelledby="mobile-menu-title" onClick={(event) => event.stopPropagation()}>
-            <div className="mobileNavSheetHeader">
-              <div><span>Conta pessoal</span><strong id="mobile-menu-title">{accountName}</strong></div>
-              <button type="button" onClick={() => setMobileMenuOpen(false)} aria-label="Fechar menu" autoFocus>×</button>
-            </div>
-            <nav aria-label="Outras áreas">
-              <Link className={active === "budget" ? "active" : ""} href="/distribuicao">Distribuição <span>→</span></Link>
-              <Link className={active === "categories" ? "active" : ""} href="/categorias">Categorias <span>→</span></Link>
-              <Link className={active === "data" ? "active" : ""} href="/dados">Dados <span>→</span></Link>
-              <Link className={active === "settings" ? "active" : ""} href="/configuracoes">Configurações <span>→</span></Link>
-            </nav>
-            <button className="mobileLogout" type="button" onClick={onLogout}>Sair da conta</button>
-          </section>
-        </div>
-      )}
     </>
   );
 }
@@ -355,6 +401,7 @@ function SimulatorView({ session, accountName, onLogout }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
+  const { askConfirmation, confirmationDialog } = useConfirmationDialog();
 
   async function loadSimulations(preferredId = selectedId) {
     const data = await apiRequest("/api/v1/simulations", session);
@@ -479,7 +526,14 @@ function SimulatorView({ session, accountName, onLogout }) {
   }
 
   async function deleteSimulation() {
-    if (!simulation || !window.confirm(`Excluir “${simulation.name}”? Essa simulação e seus itens serão removidos.`)) return;
+    if (!simulation) return;
+    const confirmed = await askConfirmation({
+      title: "Excluir simulação?",
+      message: `“${simulation.name}” e todos os seus itens serão removidos. Esta ação não pode ser desfeita.`,
+      confirmLabel: "Excluir",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     setSaving(true);
     try {
       await apiRequest(`/api/v1/simulations/${simulation.id}`, session, { method: "DELETE" });
@@ -546,7 +600,14 @@ function SimulatorView({ session, accountName, onLogout }) {
   }
 
   async function removeItem(item) {
-    if (!simulation || !window.confirm(`Remover “${item.description}” da simulação?`)) return;
+    if (!simulation) return;
+    const confirmed = await askConfirmation({
+      title: "Remover item?",
+      message: `“${item.description}” será retirado desta simulação.`,
+      confirmLabel: "Remover",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     setSaving(true);
     try {
       const updated = await apiRequest(`/api/v1/simulations/${simulation.id}/items/${item.id}`, session, { method: "DELETE" });
@@ -680,6 +741,7 @@ function SimulatorView({ session, accountName, onLogout }) {
           </aside>
         </div>
       </section>
+      {confirmationDialog}
     </main>
   );
 }
@@ -708,6 +770,7 @@ function RegisterView({ session, accountName, onLogout }) {
   const [editDate, setEditDate] = useState("");
   const [editCategoryId, setEditCategoryId] = useState("");
   const [editBusy, setEditBusy] = useState(false);
+  const { askConfirmation, confirmationDialog } = useConfirmationDialog();
 
   async function loadMovements() {
     setLoading(true);
@@ -896,7 +959,13 @@ function RegisterView({ session, accountName, onLogout }) {
   }
 
   async function removeMovement(movement) {
-    if (!window.confirm(`Excluir “${movement.description}”?`)) return;
+    const confirmed = await askConfirmation({
+      title: "Excluir movimentação?",
+      message: `“${movement.description}” será removida dos seus registros.`,
+      confirmLabel: "Excluir",
+      tone: "danger",
+    });
+    if (!confirmed) return;
 
     try {
       await apiRequest(`/api/v1/transactions/${movement.id}`, session, { method: "DELETE" });
@@ -909,7 +978,12 @@ function RegisterView({ session, accountName, onLogout }) {
   }
 
   async function confirmPlannedMovement(movement) {
-    if (!window.confirm(`Confirmar “${movement.description}” como movimentação concluída?`)) return;
+    const confirmed = await askConfirmation({
+      title: "Concluir movimentação?",
+      message: `“${movement.description}” passará a contar como um registro real concluído.`,
+      confirmLabel: "Concluir",
+    });
+    if (!confirmed) return;
 
     setConfirmingId(movement.id);
     try {
@@ -1168,6 +1242,7 @@ function RegisterView({ session, accountName, onLogout }) {
           </aside>
         </div>
       </section>
+      {confirmationDialog}
     </main>
   );
 }
@@ -1958,6 +2033,7 @@ function PlanningView({ session, accountName, onLogout }) {
   const [busy, setBusy] = useState(false);
   const [recordingId, setRecordingId] = useState(null);
   const [notice, setNotice] = useState("");
+  const { askConfirmation, confirmationDialog } = useConfirmationDialog();
 
   async function loadPlanning() {
     setLoading(true);
@@ -2124,7 +2200,12 @@ function PlanningView({ session, accountName, onLogout }) {
 
   async function recordCommitment(commitment) {
     const action = commitment.direction === "income" ? "recebimento" : "pagamento";
-    if (!window.confirm(`Registrar este ${action} de ${formatCurrency(commitment.amount)} como uma movimentação real?`)) return;
+    const confirmed = await askConfirmation({
+      title: `Registrar ${action}?`,
+      message: `${formatCurrency(commitment.amount)} será salvo como uma movimentação real.`,
+      confirmLabel: "Registrar",
+    });
+    if (!confirmed) return;
 
     setRecordingId(commitment.id);
     try {
@@ -2144,7 +2225,13 @@ function PlanningView({ session, accountName, onLogout }) {
   }
 
   async function removeCommitment(commitment) {
-    if (!window.confirm(`Excluir “${commitment.name}” do planejamento?`)) return;
+    const confirmed = await askConfirmation({
+      title: "Excluir do planejamento?",
+      message: `“${commitment.name}” deixará de aparecer nas próximas cobranças e recebimentos.`,
+      confirmLabel: "Excluir",
+      tone: "danger",
+    });
+    if (!confirmed) return;
 
     try {
       await apiRequest(`/api/v1/commitments/${commitment.id}`, session, { method: "DELETE" });
@@ -2315,6 +2402,7 @@ function PlanningView({ session, accountName, onLogout }) {
           </aside>
         </div>
       </section>
+      {confirmationDialog}
     </main>
   );
 }
@@ -2329,6 +2417,7 @@ function CategoriesView({ session, accountName, onLogout }) {
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState("");
   const [editingKind, setEditingKind] = useState("expense");
+  const { askConfirmation, confirmationDialog } = useConfirmationDialog();
 
   async function loadCategories() {
     setLoading(true);
@@ -2395,7 +2484,13 @@ function CategoriesView({ session, accountName, onLogout }) {
   }
 
   async function archiveCategory(category) {
-    if (!window.confirm(`Arquivar a categoria “${category.name}”? Ela ficará fora de novos registros, mas continuará aparecendo no histórico.`)) return;
+    const confirmed = await askConfirmation({
+      title: "Arquivar categoria?",
+      message: `“${category.name}” ficará fora de novos registros, mas continuará aparecendo no histórico.`,
+      confirmLabel: "Arquivar",
+      tone: "danger",
+    });
+    if (!confirmed) return;
 
     try {
       await apiRequest(`/api/v1/categories/${category.id}`, session, { method: "DELETE" });
@@ -2504,6 +2599,7 @@ function CategoriesView({ session, accountName, onLogout }) {
           </aside>
         </div>
       </section>
+      {confirmationDialog}
     </main>
   );
 }
