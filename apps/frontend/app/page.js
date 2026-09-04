@@ -277,13 +277,24 @@ function useConfirmationDialog() {
   };
 }
 
+function BrandIdentity() {
+  return (
+    <>
+      <svg className="brandMark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+        <path className="brandMarkPrimary" d="M8.5 28v-7c0-2.4.9-4.6 2.6-6.3l3.4-3.4c2-2 4.3-3 7.1-3h17.9" />
+        <path className="brandMarkSecondary" d="M39.5 20v7c0 2.4-.9 4.6-2.6 6.3l-3.4 3.4c-2 2-4.3 3-7.1 3H8.5" />
+      </svg>
+      <span className="brandWord">cifro</span>
+    </>
+  );
+}
+
 function Login({ email, password, setEmail, setPassword, onSubmit, error, busy }) {
   return (
     <main className="authShell">
       <section className="authIntro">
         <div className="brand authBrand" aria-label="Cifro">
-          <span className="brandMark"><i /><i /></span>
-          <span>cifro</span>
+          <BrandIdentity />
         </div>
         <div className="authMessage">
           <p className="eyebrow">SUA VIDA FINANCEIRA</p>
@@ -347,8 +358,7 @@ function Sidebar({ active, accountName, onLogout }) {
     <>
       <aside className="sidebar">
       <Link className="brand" href="/" aria-label="Cifro">
-        <span className="brandMark"><i /><i /></span>
-        <span>cifro</span>
+        <BrandIdentity />
       </Link>
 
       <nav className="mainNav" aria-label="Navegação principal">
